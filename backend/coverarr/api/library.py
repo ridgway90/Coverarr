@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any, Literal
 
@@ -214,21 +215,23 @@ def initial_of(expr: Any) -> Any:
     return case((first.between("A", "Z"), first), else_="#")
 
 
-@router.get("/items")
-async def list_items(
-    library_id: int,
-    q: str | None = None,
-    missing_on: int | None = None,
-    issues: Literal["any", "poster", "push", "missing"] | None = None,
-    letter: str | None = Query(None, pattern="^[A-Z#]$"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(60, ge=1, le=200),
-    session: AsyncSession = Depends(get_session),
-):
-    lib = await session.get(Library, library_id)
-    if lib is None:
-        raise HTTPException(404, "Library not found")
-    query = select(MediaItem).where(MediaItem.library_id == library_id, MediaItem.kind == lib.kind)
+IssueFilter = Literal["any", "poster", "push", "missing"]
+
+
+def _item_order() -> tuple:
+    return (func.coalesce(MediaItem.sort_title, MediaItem.title), MediaItem.year, MediaItem.id)
+
+
+async def _filtered_items(
+    session: AsyncSession,
+    lib: Library,
+    q: str | None,
+    missing_on: int | None,
+    issues: IssueFilter | None,
+) -> tuple[Any, set[int]]:
+    """The library listing's query with every filter but the letter, and the titles with
+    pending poster pushes."""
+    query = select(MediaItem).where(MediaItem.library_id == lib.id, MediaItem.kind == lib.kind)
     if q:
         like = f"%{q.strip()}%"
         query = query.where(or_(MediaItem.title.ilike(like), MediaItem.tmdb_id == q.strip()))
@@ -238,7 +241,7 @@ async def list_items(
     if issues in ("any", "poster", "push"):
         # Titles whose chosen base poster isn't on every server yet. Their posters differ
         # too, but they're no longer review issues because the choice has been made.
-        changes = await compute_changes(session, library_id=library_id, collections=False)
+        changes = await compute_changes(session, library_id=lib.id, collections=False)
         pending = {c.top_id for c in changes if c.top_id is not None}
     if issues:
         types = {
@@ -255,20 +258,39 @@ async def list_items(
                 MediaItem.id.in_(pending),
             )
         )
+    return query, pending
+
+
+def _with_letter(query: Any, letter: str | None) -> Any:
+    if not letter:
+        return query
+    return query.where(initial_of(func.coalesce(MediaItem.sort_title, MediaItem.title)) == letter)
+
+
+@router.get("/items")
+async def list_items(
+    library_id: int,
+    q: str | None = None,
+    missing_on: int | None = None,
+    issues: IssueFilter | None = None,
+    letter: str | None = Query(None, pattern="^[A-Z#]$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(60, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
+):
+    lib = await session.get(Library, library_id)
+    if lib is None:
+        raise HTTPException(404, "Library not found")
+    query, pending = await _filtered_items(session, lib, q, missing_on, issues)
     # Titles per first letter (with the other filters applied), for the A-Z bar.
     sub = query.subquery()
     first = initial_of(func.coalesce(sub.c.sort_title, sub.c.title))
     letters = dict((await session.execute(select(first, func.count()).group_by(first))).all())
-    if letter:
-        query = query.where(
-            initial_of(func.coalesce(MediaItem.sort_title, MediaItem.title)) == letter
-        )
+    query = _with_letter(query, letter)
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
     items = list(
         await session.scalars(
-            query.order_by(func.coalesce(MediaItem.sort_title, MediaItem.title), MediaItem.year)
-            .offset((page - 1) * page_size)
-            .limit(page_size)
+            query.order_by(*_item_order()).offset((page - 1) * page_size).limit(page_size)
         )
     )
     presence = await _presence_for(session, [i.id for i in items])
@@ -342,6 +364,40 @@ async def _issue_types_for(session: AsyncSession, ids: list[int]) -> dict[int, l
         for mi, t in rows:
             out[mi].append(t)
     return out
+
+
+@router.get("/items/{item_id}/neighbours")
+async def item_neighbours(
+    item_id: int,
+    q: str | None = None,
+    missing_on: int | None = None,
+    issues: IssueFilter | None = None,
+    letter: str | None = Query(None, pattern="^[A-Z#]$"),
+    session: AsyncSession = Depends(get_session),
+):
+    """The previous and next title in the library listing (with the same filters)."""
+    item = await session.get(MediaItem, item_id)
+    if item is None:
+        raise HTTPException(404, "Item not found")
+    lib = await session.get(Library, item.library_id)
+    if lib is None or item.kind != lib.kind:
+        return {"prev": None, "next": None, "position": None, "total": 0}
+    query, _ = await _filtered_items(session, lib, q, missing_on, issues)
+    query = _with_letter(query, letter)
+    rows = (
+        await session.execute(
+            query.with_only_columns(MediaItem.id, MediaItem.title).order_by(*_item_order())
+        )
+    ).all()
+    ids = [r.id for r in rows]
+    if item_id not in ids:
+        return {"prev": None, "next": None, "position": None, "total": len(ids)}
+    i = ids.index(item_id)
+
+    def ref(j: int) -> dict | None:
+        return {"id": rows[j].id, "title": rows[j].title} if 0 <= j < len(rows) else None
+
+    return {"prev": ref(i - 1), "next": ref(i + 1), "position": i + 1, "total": len(ids)}
 
 
 @router.get("/items/{item_id}")
@@ -519,6 +575,56 @@ async def _member_map(session: AsyncSession, scs: list[ServerCollection]) -> dic
     return {(sid, rid): mi for sid, rid, mi in rows if (sid, rid) in wanted}
 
 
+def initial_letter(name: str) -> str:
+    """Python twin of ``initial_of`` (and the UI's A-Z bar)."""
+    trimmed = re.sub(r"^(the|an|a)\s+", "", name or "", flags=re.IGNORECASE).lstrip()
+    first = trimmed[:1].upper()
+    return first if "A" <= first <= "Z" else "#"
+
+
+@router.get("/collections/{collection_id}/neighbours")
+async def collection_neighbours(
+    collection_id: int,
+    q: str | None = None,
+    issues_only: bool = False,
+    letter: str | None = Query(None, pattern="^[A-Z#]$"),
+    session: AsyncSession = Depends(get_session),
+):
+    """The previous and next collection as listed on the Collections page."""
+    coll = await session.get(Collection, collection_id)
+    if coll is None:
+        raise HTTPException(404, "Collection not found")
+    query = select(Collection.id, Collection.name).where(
+        Collection.library_id == coll.library_id
+        if coll.library_id is not None
+        else Collection.library_id.is_(None)
+    )
+    if q:
+        query = query.where(Collection.name.ilike(f"%{q.strip()}%"))
+    if issues_only:
+        query = query.where(
+            Collection.id.in_(select(Issue.collection_id).where(Issue.status == "open"))
+        )
+    rows = [
+        r
+        for r in (
+            await session.execute(
+                query.order_by(func.coalesce(Collection.sort_title, Collection.name), Collection.id)
+            )
+        ).all()
+        if not letter or initial_letter(r.name) == letter
+    ]
+    ids = [r.id for r in rows]
+    if collection_id not in ids:
+        return {"prev": None, "next": None, "position": None, "total": len(ids)}
+    i = ids.index(collection_id)
+
+    def ref(j: int) -> dict | None:
+        return {"id": rows[j].id, "title": rows[j].name} if 0 <= j < len(rows) else None
+
+    return {"prev": ref(i - 1), "next": ref(i + 1), "position": i + 1, "total": len(ids)}
+
+
 @router.get("/collections")
 async def list_collections(
     library_id: int | None = None,
@@ -536,7 +642,9 @@ async def list_collections(
             Collection.id.in_(select(Issue.collection_id).where(Issue.status == "open"))
         )
     colls = list(
-        await session.scalars(query.order_by(func.coalesce(Collection.sort_title, Collection.name)))
+        await session.scalars(
+            query.order_by(func.coalesce(Collection.sort_title, Collection.name), Collection.id)
+        )
     )
     ids = [c.id for c in colls]
     scs = (

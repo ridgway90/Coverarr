@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, Circle, FolderPlus, Minus, Pencil, RefreshCw, Trash2, UserPlus } from "lucide-react";
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import PrevNext from "../components/PrevNext";
 import PosterChooser from "../components/PosterChooser";
 import RenameCollection from "../components/RenameCollection";
 import PendingPush from "../components/PendingPush";
@@ -12,6 +13,8 @@ import { describeIssue } from "./ReviewPage";
 
 export default function CollectionDetailPage() {
   const { collectionId } = useParams();
+  const [search] = useSearchParams();
+  const from = search.get("from") ?? "";
   const qc = useQueryClient();
   const servers = useServerMap();
   const { data: libs } = useLibraries();
@@ -51,9 +54,15 @@ export default function CollectionDetailPage() {
 
   return (
     <>
-      <Link to={`/collections${library ? `?library=${library.id}` : ""}`} className="mb-3 inline-flex items-center gap-1 text-sm text-muted hover:text-text">
-        <ArrowLeft className="size-4" /> Collections
-      </Link>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <Link
+          to={`/collections${from ? `?${from}` : library ? `?library=${library.id}` : ""}`}
+          className="inline-flex items-center gap-1 text-sm text-muted hover:text-text"
+        >
+          <ArrowLeft className="size-4" /> Collections
+        </Link>
+        <PrevNext kind="collections" id={coll.id} from={from} />
+      </div>
       <PageHeader
         title={coll.name}
         subtitle={<PresenceChips servers={servers} presentIds={present} expectedIds={expected} />}

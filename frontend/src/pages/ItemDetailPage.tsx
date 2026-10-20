@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ExternalLink, RefreshCw } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import PrevNext from "../components/PrevNext";
 import PosterChooser from "../components/PosterChooser";
 import PendingPush from "../components/PendingPush";
 import { Button, Card, ErrorNote, PageHeader, PresenceChips, Spinner } from "../components/ui";
@@ -10,6 +11,8 @@ import { describeIssue } from "./ReviewPage";
 
 export default function ItemDetailPage() {
   const { itemId } = useParams();
+  const [search] = useSearchParams();
+  const from = search.get("from") ?? "";
   const qc = useQueryClient();
   const servers = useServerMap();
   const { data: libs } = useLibraries();
@@ -42,11 +45,19 @@ export default function ItemDetailPage() {
 
   return (
     <>
-      {library && (
-        <Link to={`/library/${library.id}`} className="mb-3 inline-flex items-center gap-1 text-sm text-muted hover:text-text">
-          <ArrowLeft className="size-4" /> {library.name}
-        </Link>
-      )}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        {library ? (
+          <Link
+            to={`/library/${library.id}${from ? `?${from}` : ""}`}
+            className="inline-flex items-center gap-1 text-sm text-muted hover:text-text"
+          >
+            <ArrowLeft className="size-4" /> {library.name}
+          </Link>
+        ) : (
+          <span />
+        )}
+        {(item.kind === "movie" || item.kind === "show") && <PrevNext kind="items" id={item.id} from={from} />}
+      </div>
       <PageHeader
         title={
           <>

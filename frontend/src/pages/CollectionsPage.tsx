@@ -27,7 +27,7 @@ export default function CollectionsPage() {
   const [params, setParams] = useSearchParams();
   const { data: libs } = useLibraries();
   const servers = useServerMap();
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(params.get("q") ?? "");
   const q = useDebounced(search);
   const libraries = libs?.libraries ?? [];
   const libraryId = Number(params.get("library") ?? libraries[0]?.id ?? 0);
@@ -49,6 +49,15 @@ export default function CollectionsPage() {
     return out;
   }, [data]);
   const shown = useMemo(() => (letter ? (data ?? []).filter((c) => initialOf(c.name) === letter) : data), [data, letter]);
+
+  // Carried to the collection page so Previous/Next walk this same list.
+  const listParams = (() => {
+    const p = new URLSearchParams(params);
+    p.set("library", String(libraryId));
+    if (q) p.set("q", q);
+    else p.delete("q");
+    return p.toString();
+  })();
 
   const update = (key: string, value: string) => {
     const next = new URLSearchParams(params);
@@ -89,7 +98,7 @@ export default function CollectionsPage() {
           {shown.map((c) => {
             const counts = c.servers.map((s) => s.member_count);
             return (
-              <Link key={c.id} to={`/collections/${c.id}`} className="group">
+              <Link key={c.id} to={`/collections/${c.id}?from=${encodeURIComponent(listParams)}`} className="group">
                 <div className="relative">
                   <Poster presence={c.poster} alt={c.name} className="transition group-hover:ring-2 group-hover:ring-accent" />
                   {c.issues.length > 0 && (
