@@ -12,6 +12,7 @@ from coverarr.clients.base import (
     MatchTarget,
     MediaServerClient,
     MediaServerError,
+    NotFoundError,
     RemoteCollection,
     RemoteItem,
     RemoteLibrary,
@@ -307,3 +308,39 @@ class PlexClient(MediaServerClient):
             f"/library/sections/{library_remote_id}/all",
             params={"type": 18, "id": collection_id, "title.value": name, "title.locked": 1},
         )
+
+    async def get_collection(
+        self, library_remote_id: str | None, collection_id: str
+    ) -> RemoteCollection:
+        container = await self._container(f"/library/metadata/{collection_id}")
+        rows = container.get("Metadata") or []
+        if not rows:
+            raise NotFoundError(f"plex: collection {collection_id} not found")
+        meta = rows[0]
+        coll = RemoteCollection(
+            id=str(meta["ratingKey"]),
+            name=meta.get("title") or "",
+            library_id=str(meta.get("librarySectionID") or library_remote_id or "") or None,
+            sort_title=meta.get("titleSort"),
+            summary=meta.get("summary"),
+            smart=str(meta.get("smart", "0")) in ("1", "true", "True"),
+            poster_ref=meta.get("thumb"),
+            labels=_tags(meta, "Label"),
+        )
+        async for page in self._paged(f"/library/collections/{collection_id}/children"):
+            coll.member_ids.extend(str(r["ratingKey"]) for r in page)
+        return coll
+
+    async def show_children(self, show_id: str) -> list[RemoteItem]:
+        out: list[RemoteItem] = []
+        async for page in self._paged(f"/library/metadata/{show_id}/children"):
+            out += [self._to_item(r, "season", set()) for r in page if r.get("type") == "season"]
+        async for page in self._paged(f"/library/metadata/{show_id}/allLeaves"):
+            out += [self._to_item(r, "episode", set()) for r in page]
+        return out
+
+    async def remove_from_collection(
+        self, library_remote_id: str | None, collection_id: str, member_ids: list[str]
+    ) -> None:
+        for member in member_ids:
+            await self._request("DELETE", f"/library/collections/{collection_id}/items/{member}")

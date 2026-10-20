@@ -648,6 +648,50 @@ async def rename_collection(
     return {"job_id": job.id}
 
 
+@router.post("/items/{item_id}/refresh")
+async def refresh_item(
+    item_id: int, request: Request, session: AsyncSession = Depends(get_session)
+):
+    item = await session.get(MediaItem, item_id)
+    if item is None or item.kind not in ("movie", "show"):
+        raise HTTPException(404, "Only movies and shows can be refreshed")
+    job = await request.app.state.jobs.enqueue("refresh_item", {"media_item_id": item_id})
+    return {"job_id": job.id}
+
+
+@router.post("/collections/{collection_id}/refresh")
+async def refresh_collection(
+    collection_id: int, request: Request, session: AsyncSession = Depends(get_session)
+):
+    if await session.get(Collection, collection_id) is None:
+        raise HTTPException(404, "Collection not found")
+    job = await request.app.state.jobs.enqueue(
+        "refresh_collection", {"collection_id": collection_id}
+    )
+    return {"job_id": job.id}
+
+
+class RemoveMember(BaseModel):
+    media_item_id: int
+
+
+@router.post("/collections/{collection_id}/remove-member")
+async def remove_collection_member(
+    collection_id: int,
+    body: RemoveMember,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    if await session.get(Collection, collection_id) is None:
+        raise HTTPException(404, "Collection not found")
+    if await session.get(MediaItem, body.media_item_id) is None:
+        raise HTTPException(404, "Title not found")
+    job = await request.app.state.jobs.enqueue(
+        "collection_remove", {"collection_id": collection_id, "media_item_id": body.media_item_id}
+    )
+    return {"job_id": job.id}
+
+
 # --- images -----------------------------------------------------------------------------------
 
 

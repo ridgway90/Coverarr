@@ -484,9 +484,13 @@ async def match_collections(session: AsyncSession, stats: MatchStats) -> None:
         stats.removed += len(orphans)
 
 
-async def match_all(session: AsyncSession) -> dict[str, Any]:
+async def match_all(session: AsyncSession, library_ids: list[int] | None = None) -> dict[str, Any]:
+    """Re-link everything, or only ``library_ids`` (collections are always re-linked)."""
     stats = MatchStats()
-    libraries = list(await session.scalars(select(Library).order_by(Library.id)))
+    query = select(Library).order_by(Library.id)
+    if library_ids is not None:
+        query = query.where(Library.id.in_(library_ids))
+    libraries = list(await session.scalars(query))
     for library in libraries:
         sl_ids = await _library_server_libs(session, library.id)
         shows = await match_top_level(session, library, sl_ids, stats)

@@ -22,6 +22,11 @@ from coverarr.services.importer import run_import, run_rematch
 from coverarr.services.jobs import JobRunner
 from coverarr.services.kometa import run_kometa_originals
 from coverarr.services.posters import ThumbnailCache, run_poster_scan
+from coverarr.services.refresh import (
+    run_collection_remove,
+    run_refresh_collection,
+    run_refresh_item,
+)
 from coverarr.services.settings_store import ensure_secret
 
 
@@ -48,6 +53,9 @@ def create_app(config: Settings | None = None) -> FastAPI:
         runner.register("fix_match", run_fix_match)
         runner.register("collection_rename", run_collection_rename)
         runner.register("kometa_originals", run_kometa_originals)
+        runner.register("refresh_item", run_refresh_item)
+        runner.register("refresh_collection", run_refresh_collection)
+        runner.register("collection_remove", run_collection_remove)
         runner.register("check_definitions", run_check_definitions)
         await runner.start()
         app.state.jobs = runner

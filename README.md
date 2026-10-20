@@ -24,7 +24,8 @@ possible: it tracks what each server already has and only touches what actually 
   Radarr/Sonarr too.
 - **Review screen** listing every difference between servers:
   - collections missing on a server → **create them there** in one click (or all at once)
-  - collections whose members differ → **add the missing members** (nothing is ever removed)
+  - collections whose members differ → **add the missing members** (Coverarr never removes
+    anything on its own; on a collection's page you can remove a title from it on every server)
   - posters that differ → **pick which server has the clean base poster**
   - titles missing on a server
   Anything can be ignored; ignored items stay ignored across imports.
@@ -44,6 +45,10 @@ possible: it tracks what each server already has and only touches what actually 
     the right library and bring over TMDb/Trakt keys). TMDb lists, TMDb collections and Trakt
     lists are understood; **Check** compares each list with your library and with the
     collection Kometa built on each server.
+- **Refresh one thing instead of re-importing.** Every film, show and collection page has a
+  *Refresh* button that re-reads just that title (a show brings its seasons and episodes) or
+  collection from every server, re-fingerprints any poster that changed and updates the review
+  list. It takes a second or two, instead of a full import.
 - **Server load setting** (gentle / normal / fast). Normal imports all servers at once;
   gentle goes one at a time with fewer parallel requests.
 - Single admin login, activity log for every import, scan and change pushed to a server.

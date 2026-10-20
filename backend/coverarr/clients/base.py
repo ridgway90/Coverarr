@@ -18,6 +18,10 @@ class MediaServerError(Exception):
     pass
 
 
+class NotFoundError(MediaServerError):
+    """The item or collection no longer exists on the server."""
+
+
 @dataclass(slots=True)
 class ServerInfo:
     name: str
@@ -140,6 +144,8 @@ class MediaServerClient(ABC):
             raise MediaServerError(f"{self.kind}: {method} {path} failed: {exc}") from exc
         if resp.status_code in (401, 403):
             raise MediaServerError(f"{self.kind}: authentication rejected ({resp.status_code})")
+        if resp.status_code == 404:
+            raise NotFoundError(f"{self.kind}: {method} {path} not found")
         if resp.status_code >= 400:
             raise MediaServerError(
                 f"{self.kind}: {method} {path} returned {resp.status_code}: {resp.text[:200]}"
@@ -203,3 +209,18 @@ class MediaServerClient(ABC):
         self, library_remote_id: str | None, collection_id: str, name: str
     ) -> None:
         """Rename a collection (and lock the title so the server doesn't revert it)."""
+
+    @abstractmethod
+    async def get_collection(
+        self, library_remote_id: str | None, collection_id: str
+    ) -> RemoteCollection:
+        """Fetch one collection fresh, members included."""
+
+    @abstractmethod
+    async def show_children(self, show_id: str) -> list[RemoteItem]:
+        """All seasons and episodes of one show."""
+
+    @abstractmethod
+    async def remove_from_collection(
+        self, library_remote_id: str | None, collection_id: str, member_ids: list[str]
+    ) -> None: ...

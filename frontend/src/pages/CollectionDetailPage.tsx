@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, Circle, FolderPlus, Minus, Pencil, UserPlus } from "lucide-react";
+import { ArrowLeft, Check, Circle, FolderPlus, Minus, Pencil, RefreshCw, Trash2, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import PosterChooser from "../components/PosterChooser";
 import RenameCollection from "../components/RenameCollection";
 import { Button, Card, ErrorNote, PageHeader, PresenceChips, ServerChip, Spinner } from "../components/ui";
 import { api, type CollectionDetail } from "../lib/api";
-import { useLibraries, useServerMap } from "../lib/hooks";
+import { useJobAction, useLibraries, useServerMap } from "../lib/hooks";
 import { describeIssue } from "./ReviewPage";
 
 export default function CollectionDetailPage() {
@@ -26,6 +26,15 @@ export default function CollectionDetailPage() {
     mutationFn: (source: string | null) => api.put(`/api/collections/${collectionId}/poster-source`, { poster_source: source }),
     onSuccess: refresh,
   });
+  const reload = useJobAction(() => api.post<{ job_id: number }>(`/api/collections/${collectionId}/refresh`), [
+    "collection",
+    "collections",
+  ]);
+  const removeMember = useJobAction(
+    (mediaItemId: number) =>
+      api.post<{ job_id: number }>(`/api/collections/${collectionId}/remove-member`, { media_item_id: mediaItemId }),
+    ["collection", "collections"],
+  );
   const sync = useMutation({
     mutationFn: (body: { create: boolean; add_members: boolean }) => api.post(`/api/collections/${collectionId}/sync`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["dashboard"] }),
@@ -49,6 +58,15 @@ export default function CollectionDetailPage() {
         subtitle={<PresenceChips servers={servers} presentIds={present} expectedIds={expected} />}
         actions={
           <>
+            <Button
+              variant="ghost"
+              icon={<RefreshCw className="size-4" />}
+              loading={reload.running}
+              onClick={() => reload.run(undefined)}
+              title="Re-read this collection from every server, without a full import"
+            >
+              Refresh
+            </Button>
             <Button variant="ghost" icon={<Pencil className="size-4" />} onClick={() => setRenaming(true)}>
               Rename
             </Button>
@@ -76,7 +94,20 @@ export default function CollectionDetailPage() {
           Queued. Watch progress in the sidebar; this page refreshes when it's done.
         </div>
       )}
-      <ErrorNote error={sync.error} />
+      <ErrorNote error={sync.error ?? reload.error ?? removeMember.error} />
+      {[reload.job, removeMember.job].map(
+        (job) =>
+          job?.status === "failed" && (
+            <div key={job.id} className="mb-4 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
+              {job.error}
+            </div>
+          ),
+      )}
+      {reload.job?.status === "succeeded" && (
+        <div className="mb-4 rounded-md border border-line bg-panel-2 px-3 py-2 text-sm">
+          {((reload.job.result?.changes as string[] | undefined) ?? []).join(" · ") || "Refreshed."}
+        </div>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Card className="p-5">
@@ -141,6 +172,9 @@ export default function CollectionDetailPage() {
                   {servers.get(s.server_id)?.name}
                 </th>
               ))}
+              <th className="w-12 px-3 py-2">
+                <span className="sr-only">Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
@@ -166,6 +200,26 @@ export default function CollectionDetailPage() {
                     </td>
                   );
                 })}
+                <td className="px-3 py-1 text-right">
+                  {coll.servers.some((s) => !s.smart && m.in_collection_on.includes(s.server_id)) && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      icon={<Trash2 className="size-4" />}
+                      aria-label={`Remove ${m.title} from ${coll.name}`}
+                      title="Remove from this collection on every server"
+                      disabled={removeMember.running}
+                      onClick={() => {
+                        const where = coll.servers
+                          .filter((s) => !s.smart && m.in_collection_on.includes(s.server_id))
+                          .map((s) => servers.get(s.server_id)?.name)
+                          .join(", ");
+                        if (confirm(`Remove "${m.title}" from "${coll.name}" on ${where}? The film itself isn't touched.`))
+                          removeMember.run(m.id);
+                      }}
+                    />
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

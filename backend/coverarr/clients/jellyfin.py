@@ -242,6 +242,49 @@ class JellyfinClient(MediaServerClient):
         item["LockedFields"] = sorted(locked | {"Name"})
         await self._request("POST", f"/Items/{collection_id}", json=item)
 
+    async def get_collection(
+        self, library_remote_id: str | None, collection_id: str
+    ) -> RemoteCollection:
+        uid = await self.user_id()
+        row = await self._json("GET", f"/Users/{uid}/Items/{collection_id}")
+        coll = RemoteCollection(
+            id=str(row["Id"]),
+            name=row.get("Name") or "",
+            library_id=None,
+            sort_title=row.get("SortName"),
+            summary=row.get("Overview"),
+            poster_ref=(row.get("ImageTags") or {}).get("Primary"),
+            labels=[str(t) for t in row.get("Tags") or []],
+        )
+        async for rows in self._paged({"ParentId": collection_id, "Fields": "ProviderIds"}):
+            coll.member_ids.extend(str(r["Id"]) for r in rows)
+        return coll
+
+    async def show_children(self, show_id: str) -> list[RemoteItem]:
+        kinds = {"Season": "season", "Episode": "episode"}
+        out: list[RemoteItem] = []
+        async for rows in self._paged(
+            {
+                "ParentId": show_id,
+                "Recursive": "true",
+                "IncludeItemTypes": "Season,Episode",
+                "Fields": FIELDS,
+                "EnableImageTypes": "Primary",
+            }
+        ):
+            out += [self._to_item(r, kinds[r["Type"]]) for r in rows if r.get("Type") in kinds]
+        return out
+
+    async def remove_from_collection(
+        self, library_remote_id: str | None, collection_id: str, member_ids: list[str]
+    ) -> None:
+        if member_ids:
+            await self._request(
+                "DELETE",
+                f"/Collections/{collection_id}/Items",
+                params={"Ids": ",".join(member_ids)},
+            )
+
 
 class EmbyClient(JellyfinClient):
     kind = "emby"
