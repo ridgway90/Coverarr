@@ -1,5 +1,5 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 import { api, type Dashboard, type Job, type Library, type Server } from "./api";
 
 export function useServers() {
@@ -49,9 +49,44 @@ export const JOB_LABELS: Record<string, string> = {
   fix_match: "Fix match",
   collection_rename: "Rename collection",
   kometa_originals: "Import Kometa originals",
+  refresh_item: "Refresh title",
+  refresh_collection: "Refresh collection",
+  collection_remove: "Remove from collection",
   check_definitions: "Check collection lists",
 };
 
 export function jobLabel(job: Pick<Job, "kind">): string {
   return JOB_LABELS[job.kind] ?? job.kind;
+}
+
+/**
+ * Start a background job and follow it to the end. When it finishes, the given query keys
+ * are refreshed so the page shows the result without a reload.
+ */
+export function useJobAction<T>(start: (arg: T) => Promise<{ job_id: number }>, refresh: string[]) {
+  const qc = useQueryClient();
+  const [jobId, setJobId] = useState<number | null>(null);
+  const mutation = useMutation({ mutationFn: start, onSuccess: (r) => setJobId(r.job_id) });
+  const job = useQuery({
+    queryKey: ["jobs", jobId],
+    queryFn: () => api.get<Job>(`/api/jobs/${jobId}`),
+    enabled: jobId !== null,
+    refetchInterval: (q) => (q.state.data && ["succeeded", "failed"].includes(q.state.data.status) ? false : 800),
+  });
+  const finished = Boolean(job.data && ["succeeded", "failed"].includes(job.data.status));
+  // Refresh once per finished job (the key list is a new array on every render).
+  const handled = useRef<number | null>(null);
+  const keys = useRef(refresh);
+  keys.current = refresh;
+  useEffect(() => {
+    if (!finished || jobId === null || handled.current === jobId) return;
+    handled.current = jobId;
+    for (const key of [...keys.current, "dashboard", "issues", "review"]) qc.invalidateQueries({ queryKey: [key] });
+  }, [finished, jobId, qc]);
+  return {
+    run: mutation.mutate,
+    running: mutation.isPending || (jobId !== null && !finished),
+    job: job.data,
+    error: mutation.error,
+  };
 }

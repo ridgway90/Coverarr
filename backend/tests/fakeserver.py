@@ -427,10 +427,45 @@ def plex_router(srv: FakeServer) -> APIRouter:
     @r.get("/library/metadata/{rk}")
     async def metadata(rk: str, request: Request):
         auth(request)
+        if rk in srv.collections:
+            c = srv.collections[rk]
+            return {
+                "MediaContainer": {
+                    "Metadata": [
+                        {
+                            "ratingKey": c.id,
+                            "title": c.name,
+                            "type": "collection",
+                            "librarySectionID": c.library,
+                            "smart": "1" if c.smart else "0",
+                            "thumb": f"/library/metadata/{c.id}/thumb/{1700000000 + c.art_version}",
+                        }
+                    ]
+                }
+            }
         item = srv.items.get(rk) or _missing()
         out = meta(item)
         out["Label"] = [{"tag": t} for t in item.labels]
         return {"MediaContainer": {"Metadata": [out]}}
+
+    @r.get("/library/metadata/{rk}/children")
+    async def item_children(rk: str, request: Request):
+        auth(request)
+        return page(request, [meta(i) for i in srv.items.values() if i.parent == rk])
+
+    @r.get("/library/metadata/{rk}/allLeaves")
+    async def all_leaves(rk: str, request: Request):
+        auth(request)
+        return page(
+            request, [meta(i) for i in srv.items.values() if i.show == rk and i.kind == "episode"]
+        )
+
+    @r.delete("/library/collections/{cid}/items/{rk}")
+    async def remove_member(cid: str, rk: str, request: Request):
+        auth(request)
+        coll = srv.collections.get(cid) or _missing()
+        coll.members = [m for m in coll.members if m != rk]
+        return {"MediaContainer": {}}
 
     @r.get("/library/metadata/{rk}/matches")
     async def matches(rk: str, request: Request):
@@ -591,6 +626,13 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
             rows = [coll_row(c) for c in srv.collections.values()]
         elif parent in srv.collections:
             rows = [row(srv.items[m]) for m in srv.collections[parent].members]
+        elif parent in srv.items:
+            kinds = {JF_TYPE[t] for t in types.split(",") if t}
+            rows = [
+                row(i)
+                for i in srv.items.values()
+                if i.show == parent and i.id != parent and (not kinds or i.kind in kinds)
+            ]
         else:
             kinds = {JF_TYPE[t] for t in types.split(",") if t}
             rows = [
@@ -657,6 +699,14 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
         coll = Coll(srv.new_id(), qp["Name"], "", [i for i in qp.get("Ids", "").split(",") if i])
         srv.collections[coll.id] = coll
         return {"Id": coll.id}
+
+    @r.delete("/Collections/{cid}/Items")
+    async def remove(cid: str, request: Request):
+        auth(request)
+        coll = srv.collections.get(cid) or _missing()
+        gone = set(request.query_params["Ids"].split(","))
+        coll.members = [m for m in coll.members if m not in gone]
+        return Response(status_code=204)
 
     @r.post("/Collections/{cid}/Items")
     async def add(cid: str, request: Request):

@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ArrowLeft, ExternalLink, RefreshCw } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import PosterChooser from "../components/PosterChooser";
-import { Card, ErrorNote, PageHeader, PresenceChips, Spinner } from "../components/ui";
+import { Button, Card, ErrorNote, PageHeader, PresenceChips, Spinner } from "../components/ui";
 import { api, type ItemDetail } from "../lib/api";
-import { useLibraries, useServerMap } from "../lib/hooks";
+import { useJobAction, useLibraries, useServerMap } from "../lib/hooks";
 import { describeIssue } from "./ReviewPage";
 
 export default function ItemDetailPage() {
@@ -16,6 +16,7 @@ export default function ItemDetailPage() {
     queryKey: ["item", itemId],
     queryFn: () => api.get<ItemDetail>(`/api/items/${itemId}`),
   });
+  const reload = useJobAction(() => api.post<{ job_id: number }>(`/api/items/${itemId}/refresh`), ["item", "items"]);
   const choose = useMutation({
     mutationFn: (source: string | null) => api.put(`/api/items/${itemId}/poster-source`, { poster_source: source }),
     onSuccess: () => {
@@ -62,7 +63,32 @@ export default function ItemDetailPage() {
             {!ids.length && <span className="text-warn">No TMDb/TVDB/IMDb ids: matched by title and year</span>}
           </span>
         }
+        actions={
+          <Button
+            variant="ghost"
+            icon={<RefreshCw className="size-4" />}
+            loading={reload.running}
+            onClick={() => reload.run(undefined)}
+            title={`Re-read this ${item.kind === "show" ? "show, its seasons and episodes" : "movie"} from every server, without a full import`}
+          >
+            Refresh
+          </Button>
+        }
       />
+      <ErrorNote error={reload.error} />
+      {reload.job && !reload.running && (
+        <div
+          className={
+            reload.job.status === "failed"
+              ? "mb-4 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
+              : "mb-4 rounded-md border border-line bg-panel-2 px-3 py-2 text-sm"
+          }
+        >
+          {reload.job.status === "failed"
+            ? reload.job.error
+            : ((reload.job.result?.changes as string[] | undefined) ?? []).join(" · ") || "Refreshed."}
+        </div>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Card className="p-5">
