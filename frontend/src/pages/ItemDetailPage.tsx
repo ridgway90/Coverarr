@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ExternalLink, RefreshCw } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import PosterChooser from "../components/PosterChooser";
+import PendingPush from "../components/PendingPush";
 import { Button, Card, ErrorNote, PageHeader, PresenceChips, Spinner } from "../components/ui";
 import { api, type ItemDetail } from "../lib/api";
 import { useJobAction, useLibraries, useServerMap } from "../lib/hooks";
@@ -90,12 +91,13 @@ export default function ItemDetailPage() {
         </div>
       )}
 
+      <PendingPush mediaItemId={item.id} />
+
       <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Card className="p-5">
           <h2 className="mb-1 font-semibold">Posters on each server</h2>
           <p className="mb-4 text-sm text-muted">
-            Pick the clean base artwork. Coverarr will push it, with your overlays, to every server once poster pushing
-            arrives in the next phase.
+            Pick the clean base artwork. It's queued under Changes until you push it to every server.
           </p>
           <PosterChooser
             title={item.title}

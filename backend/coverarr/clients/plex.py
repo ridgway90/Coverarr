@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import uuid
 from collections.abc import AsyncIterator
@@ -21,6 +22,9 @@ from coverarr.clients.base import (
 )
 
 PLEX_TYPES: dict[str, int] = {"movie": 1, "show": 2, "season": 3, "episode": 4}
+EDIT_TYPES: dict[str, int] = {**PLEX_TYPES, "collection": 18}
+
+log = logging.getLogger(__name__)
 
 # Legacy agent GUIDs, e.g. com.plexapp.agents.imdb://tt0111161?lang=en
 _LEGACY_GUID = re.compile(r"^com\.plexapp\.agents\.(\w+)://([^/?]+)")
@@ -344,3 +348,28 @@ class PlexClient(MediaServerClient):
     ) -> None:
         for member in member_ids:
             await self._request("DELETE", f"/library/collections/{collection_id}/items/{member}")
+
+    async def upload_poster(self, item_id: str, data: bytes, content_type: str) -> str | None:
+        # Plex selects (and locks) an uploaded poster straight away.
+        await self._request(
+            "POST",
+            f"/library/metadata/{item_id}/posters",
+            content=data,
+            headers={"Content-Type": content_type},
+        )
+        container = await self._container(f"/library/metadata/{item_id}")
+        meta = (container.get("Metadata") or [{}])[0]
+        # Kometa's "Overlay" label means "this poster has overlays, keep the original". The new
+        # poster has none of Kometa's, so drop the label or Kometa would think otherwise.
+        overlay = next((t for t in _tags(meta, "Label") if t.lower() == "overlay"), None)
+        type_id, section = EDIT_TYPES.get(meta.get("type", "")), meta.get("librarySectionID")
+        if overlay and type_id and section:
+            try:
+                await self._request(
+                    "PUT",
+                    f"/library/sections/{section}/all",
+                    params={"type": type_id, "id": item_id, "label[].tag.tag-": overlay},
+                )
+            except MediaServerError as exc:
+                log.warning("Could not remove the Overlay label from %s: %s", item_id, exc)
+        return meta.get("thumb")

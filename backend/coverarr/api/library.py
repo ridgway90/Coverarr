@@ -22,6 +22,7 @@ from coverarr.models import (
     ServerItem,
     ServerLibrary,
 )
+from coverarr.services.changes import compute_changes
 
 router = APIRouter(prefix="/api", tags=["library"])
 
@@ -205,7 +206,7 @@ async def list_items(
     library_id: int,
     q: str | None = None,
     missing_on: int | None = None,
-    issues: Literal["any", "poster", "missing"] | None = None,
+    issues: Literal["any", "poster", "push", "missing"] | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(60, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
@@ -219,15 +220,25 @@ async def list_items(
         query = query.where(or_(MediaItem.title.ilike(like), MediaItem.tmdb_id == q.strip()))
     if missing_on is not None:
         query = query.where(~MediaItem.server_items.any(ServerItem.server_id == missing_on))
+    pending: set[int] = set()
+    if issues in ("any", "poster", "push"):
+        # Titles whose chosen base poster isn't on every server yet. Their posters differ
+        # too, but they're no longer review issues because the choice has been made.
+        changes = await compute_changes(session, library_id=library_id, collections=False)
+        pending = {c.top_id for c in changes if c.top_id is not None}
     if issues:
         types = {
             "any": ("item_missing", "poster_differs"),
             "poster": ("poster_differs",),
+            "push": (),
             "missing": ("item_missing",),
         }[issues]
         query = query.where(
-            MediaItem.id.in_(
-                select(Issue.media_item_id).where(Issue.type.in_(types), Issue.status == "open")
+            or_(
+                MediaItem.id.in_(
+                    select(Issue.media_item_id).where(Issue.type.in_(types), Issue.status == "open")
+                ),
+                MediaItem.id.in_(pending),
             )
         )
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
@@ -241,8 +252,29 @@ async def list_items(
     presence = await _presence_for(session, [i.id for i in items])
     artworks = await _artworks_for(session, item_ids=[i.id for i in items])
     open_issues = await _issue_types_for(session, [i.id for i in items])
+    for i in items:
+        if i.id in pending:
+            open_issues[i.id].append("push_pending")
+    # Posters not fingerprinted yet can't be compared, so filters may miss them.
+    unscanned = await session.scalar(
+        select(func.count(ServerItem.id))
+        .join(ServerLibrary, ServerLibrary.id == ServerItem.server_library_id)
+        .join(Server, Server.id == ServerItem.server_id)
+        .where(
+            ServerLibrary.library_id == library_id,
+            Server.enabled.is_(True),
+            ServerItem.kind == lib.kind,
+            ServerItem.media_item_id.is_not(None),
+            ServerItem.poster_ref.is_not(None),
+            or_(
+                ServerItem.poster_hash_ref.is_(None),
+                ServerItem.poster_hash_ref != ServerItem.poster_ref,
+            ),
+        )
+    )
     return {
         "total": total,
+        "unscanned": unscanned,
         "page": page,
         "page_size": page_size,
         "items": [

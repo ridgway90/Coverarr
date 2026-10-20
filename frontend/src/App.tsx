@@ -5,6 +5,7 @@ import Layout from "./components/Layout";
 import { Spinner } from "./components/ui";
 import { api, type AuthStatus } from "./lib/api";
 import AuthPage from "./pages/AuthPage";
+import ChangesPage from "./pages/ChangesPage";
 import CollectionDetailPage from "./pages/CollectionDetailPage";
 import CollectionsPage from "./pages/CollectionsPage";
 import DashboardPage from "./pages/DashboardPage";
@@ -38,6 +39,7 @@ export default function App() {
         <Route path="collections" element={<CollectionsPage />} />
         <Route path="collections/:collectionId" element={<CollectionDetailPage />} />
         <Route path="review" element={<ReviewPage />} />
+        <Route path="changes" element={<ChangesPage />} />
         <Route path="jobs" element={<JobsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

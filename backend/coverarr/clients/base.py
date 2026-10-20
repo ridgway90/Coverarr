@@ -221,6 +221,13 @@ class MediaServerClient(ABC):
         """All seasons and episodes of one show."""
 
     @abstractmethod
+    async def upload_poster(self, item_id: str, data: bytes, content_type: str) -> str | None:
+        """Upload a poster for an item or collection and make it the selected one.
+
+        Returns the new poster ref, so the caller can tell later whether it changed again.
+        """
+
+    @abstractmethod
     async def remove_from_collection(
         self, library_remote_id: str | None, collection_id: str, member_ids: list[str]
     ) -> None: ...

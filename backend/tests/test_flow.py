@@ -14,6 +14,12 @@ async def add_servers(client) -> dict[str, int]:
     return ids
 
 
+async def last_job(client, kind: str) -> dict:
+    jobs = (await client.get("/api/jobs")).json()
+    job_id = next(j["id"] for j in jobs if j["kind"] == kind)
+    return (await client.get(f"/api/jobs/{job_id}")).json()
+
+
 async def issues(client, type_, status="open") -> list[dict]:
     resp = await client.get("/api/review/issues", params={"type": type_, "status": status})
     return resp.json()["issues"]
@@ -178,16 +184,17 @@ async def test_full_flow(app, authed, fake_servers):
     arrival = next(i for i in after["items"] if i["title"] == "Arrival")
     assert arrival["poster_source"] == f"server:{server_ids['jellyfin']}"
 
-    # Incremental poster scan: only the newly created collections need fingerprints.
-    rescan = await run_job(app, client, "poster_scan")
-    assert rescan["result"]["total"] == 4
+    # Each import is followed by an incremental poster scan: only the newly created
+    # collections needed fingerprints.
+    assert (await last_job(client, "poster_scan"))["result"]["total"] == 4
 
     # A changed poster on one server is picked up by its new poster ref alone.
     jf.by_title("Hot Fuzz").alt_art = True
     jf.by_title("Hot Fuzz").art_version += 1
     await run_job(app, client, "import")
+    assert (await last_job(client, "poster_scan"))["result"]["total"] == 1
     rescan = await run_job(app, client, "poster_scan")
-    assert rescan["result"]["total"] == 1
+    assert rescan["result"]["total"] == 0
     assert [i["title"] for i in await issues(client, "poster_differs")] == ["Hot Fuzz (2007)"]
 
 

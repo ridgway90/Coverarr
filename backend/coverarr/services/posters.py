@@ -20,7 +20,7 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.clients import MediaServerClient, MediaServerError, client_for
-from coverarr.models import Server, ServerCollection, ServerItem
+from coverarr.models import MediaItem, Server, ServerCollection, ServerItem
 from coverarr.services.client_pool import ClientPool
 from coverarr.services.jobs import JobContext
 from coverarr.services.load import load_profile
@@ -69,7 +69,17 @@ async def _pending(session: AsyncSession, server_id: int) -> list[tuple[str, int
     items = await session.execute(
         select(ServerItem.id, ServerItem.remote_id, ServerItem.poster_ref).where(
             ServerItem.server_id == server_id,
-            ServerItem.kind.in_(("movie", "show")),
+            # Seasons and episodes only when a base poster was chosen for them (e.g. Kometa
+            # originals): that's when we need to know whether each server already shows it.
+            or_(
+                ServerItem.kind.in_(("movie", "show")),
+                ServerItem.media_item_id.in_(
+                    select(MediaItem.id).where(
+                        MediaItem.poster_source.is_not(None),
+                        MediaItem.kind.in_(("season", "episode")),
+                    )
+                ),
+            ),
             ServerItem.media_item_id.is_not(None),
             ServerItem.poster_ref.is_not(None),
             stale,

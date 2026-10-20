@@ -191,6 +191,8 @@ class ServerItem(Base):
     # Perceptual hash of the poster and the poster_ref it was computed for.
     poster_hash: Mapped[str | None] = mapped_column(String(32))
     poster_hash_ref: Mapped[str | None] = mapped_column(String(500))
+    # The poster_ref right after Coverarr last uploaded a poster here.
+    pushed_ref: Mapped[str | None] = mapped_column(String(500))
     media_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("media_items.id", ondelete="SET NULL")
     )
@@ -243,6 +245,7 @@ class ServerCollection(Base):
     labels: Mapped[list[str]] = mapped_column(JSON, default=list)
     poster_hash: Mapped[str | None] = mapped_column(String(32))
     poster_hash_ref: Mapped[str | None] = mapped_column(String(500))
+    pushed_ref: Mapped[str | None] = mapped_column(String(500))
     member_remote_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     collection_id: Mapped[int | None] = mapped_column(
         ForeignKey("collections.id", ondelete="SET NULL")

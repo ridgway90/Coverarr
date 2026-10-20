@@ -135,6 +135,33 @@ export interface Page<T> {
   page: number;
   page_size: number;
   items: T[];
+  /** Library listings: posters not fingerprinted yet, which poster filters can't see. */
+  unscanned?: number;
+}
+
+export interface PendingChange {
+  target: "item" | "collection";
+  id: number;
+  title: string;
+  kind: "movie" | "show" | "season" | "episode" | "collection";
+  library_id: number | null;
+  library: string | null;
+  source: string;
+  top_id: number | null;
+  base: PosterRef | null;
+  problem: string | null;
+  servers: { server_id: number; reason: string; current: PosterRef | null }[];
+}
+
+export interface ChangesPage extends Page<PendingChange> {
+  uploads: number;
+}
+
+export interface ChangesSummary {
+  titles: number;
+  collections: number;
+  uploads: number;
+  problems: number;
 }
 
 export interface Issue {

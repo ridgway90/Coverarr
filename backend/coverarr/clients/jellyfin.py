@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -284,6 +285,18 @@ class JellyfinClient(MediaServerClient):
                 f"/Collections/{collection_id}/Items",
                 params={"Ids": ",".join(member_ids)},
             )
+
+    async def upload_poster(self, item_id: str, data: bytes, content_type: str) -> str | None:
+        # Jellyfin and Emby both take the image base64-encoded in the request body.
+        await self._request(
+            "POST",
+            f"/Items/{item_id}/Images/Primary",
+            content=base64.b64encode(data),
+            headers={"Content-Type": content_type},
+        )
+        uid = await self.user_id()
+        row = await self._json("GET", f"/Users/{uid}/Items/{item_id}")
+        return (row.get("ImageTags") or {}).get("Primary")
 
 
 class EmbyClient(JellyfinClient):

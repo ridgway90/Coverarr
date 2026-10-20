@@ -59,6 +59,10 @@ class JobRequest(BaseModel):
 async def start_job(body: JobRequest, request: Request):
     params = {"server_ids": body.server_ids} if body.kind == "import" and body.server_ids else {}
     job = await request.app.state.jobs.enqueue(body.kind, params)
+    if body.kind == "import":
+        # Fingerprint whatever posters changed, so poster differences and pending pushes are
+        # up to date without a separate scan. Only new or changed posters are downloaded.
+        await request.app.state.jobs.enqueue("poster_scan")
     return job_out(job, request.app.state.jobs)
 
 
