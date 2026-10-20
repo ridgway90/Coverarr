@@ -113,12 +113,17 @@ async def test_kometa_originals_zip(app, authed, fake_servers):
     assert (r["imported"], r["unmatched"], r["not_original"], r["unreadable"]) == (4, 1, 1, 1)
     assert (r["applied"], r["kept_choice"]) == (3, 1)
 
-    # Files land in config/assets/kometa with the id and a readable title; upload removed.
+    # Files land in the assets tree by what they belong to; the upload is removed afterwards.
     config_dir = app.state.config.config_dir
-    names = sorted(p.name for p in (config_dir / "assets" / "kometa").iterdir())
-    assert any(n.endswith(" - Arrival (2016).png") for n in names), names
-    assert any(" - Black Books - Season 1." in n or " - Spaced - Season 1." in n for n in names)
-    assert any(n.endswith(" - Cornetto Collection.png") for n in names)
+    assets = config_dir / "assets"
+    files = sorted(str(p.relative_to(assets)) for p in assets.rglob("*") if p.is_file())
+    assert "movies/Arrival (2016) {tmdb-329865}/poster-kometa.png" in files, files
+    # Named by the image's real format, not the source file's extension (that one was a PNG).
+    assert "movies/Hot Fuzz (2007) {tmdb-4638}/poster-kometa.png" in files
+    assert "collections/Cornetto Collection/poster-kometa.png" in files
+    show = season.show and fake_servers["plex"].items[season.show]
+    show_folder = f"tv/{show.title} ({show.year}) {{tvdb-{show.ids['tvdb']}}}"
+    assert f"{show_folder}/season{season.index:02d}-kometa.png" in files
     assert not list((config_dir / "imports").iterdir())
 
     # Arrival now uses the Kometa original as its base, so its poster issue is gone.
@@ -142,7 +147,8 @@ async def test_kometa_originals_zip(app, authed, fake_servers):
         },
     )
     await app.state.jobs.wait_idle()
-    assert len(list((config_dir / "assets" / "kometa").glob("m* - Arrival*"))) == 1
+    arrival_dir = assets / "movies" / "Arrival (2016) {tmdb-329865}"
+    assert [p.name for p in arrival_dir.iterdir()] == ["poster-kometa.png"]
 
 
 async def test_kometa_originals_folder(app, authed, fake_servers, tmp_path):
@@ -281,3 +287,42 @@ async def test_yaml_without_config_uses_chosen_library(app, authed, fake_servers
     assert definition["library_id"] == tv["id"]
     await client.delete(f"/api/definitions/{definition['id']}")
     assert (await client.get("/api/definitions")).json() == []
+
+
+async def test_old_kometa_layout_is_moved(app, authed, fake_servers):
+    """Artwork imported into assets/kometa by an earlier version moves into the new tree."""
+    from sqlalchemy import select
+
+    from coverarr.db import session_factory
+    from coverarr.models import Artwork, MediaItem
+    from coverarr.services.assets import relocate_artwork
+    from coverarr.services.settings_store import set_setting
+
+    client = authed
+    await add_servers(client)
+    await run_job(app, client, "import")
+    config_dir = app.state.config.config_dir
+    old = config_dir / "assets" / "kometa" / "m1 - Elf (2003).png"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(poster_png("elf"))
+    async with session_factory()() as session:
+        elf = await session.scalar(select(MediaItem).where(MediaItem.title == "Elf"))
+        session.add(
+            Artwork(
+                source="kometa",
+                media_item_id=elf.id,
+                file_path="assets/kometa/m1 - Elf (2003).png",
+            )
+        )
+        await set_setting(session, "artwork_layout", 1)
+        await session.commit()
+
+    assert await relocate_artwork(session_factory(), config_dir) == 1
+    new = config_dir / "assets" / "movies" / "Elf (2003) {tmdb-10719}" / "poster-kometa.png"
+    assert new.exists() and not old.exists()
+    assert not (config_dir / "assets" / "kometa").exists()  # emptied folder is removed
+    async with session_factory()() as session:
+        art = await session.scalar(select(Artwork))
+        assert art.file_path == "assets/movies/Elf (2003) {tmdb-10719}/poster-kometa.png"
+    # It only runs once.
+    assert await relocate_artwork(session_factory(), config_dir) == 0

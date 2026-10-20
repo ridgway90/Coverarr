@@ -3,7 +3,8 @@
 Kometa keeps the clean poster of everything it overlays in
 ``config/overlays/<Library> Original Posters/<ratingKey>.<ext>``. Those are exactly the base
 images Coverarr needs, keyed by the Plex rating key of the movie/show/season/episode or
-collection they belong to.
+collection they belong to. They're stored in the assets tree (see services/assets.py) as
+``poster-kometa.<ext>`` and friends.
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-import re
 import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -23,6 +23,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.models import Artwork, Collection, MediaItem, Server, ServerCollection, ServerItem
+from coverarr.services.assets import artwork_path, describe_owners, taken_paths, write_asset
 from coverarr.services.jobs import JobContext
 from coverarr.services.posters import poster_hash
 
@@ -111,8 +112,6 @@ async def run_kometa_originals(ctx: JobContext) -> dict[str, Any]:
     config_dir = Path(ctx.params["config_dir"])
     source = Path(ctx.params["source"])
     remove_after = bool(ctx.params.get("remove_after"))
-    assets = config_dir / "assets" / "kometa"
-    assets.mkdir(parents=True, exist_ok=True)
 
     async with ctx.sessionmaker() as session:
         server = await _plex_server(session, ctx.params.get("server_id"))
@@ -147,9 +146,12 @@ async def run_kometa_originals(ctx: JobContext) -> dict[str, Any]:
     imported_items: dict[int, int] = {}  # media_item_id -> artwork id
     imported_colls: dict[int, int] = {}
 
+    async with ctx.sessionmaker() as session:
+        taken = await taken_paths(session)
+
     async def store(batch: list[Prepared]) -> None:
         async with ctx.sessionmaker() as session:
-            labels = await _labels(
+            owners = await describe_owners(
                 session,
                 [items[p.key] for p in batch if p.key in items],
                 [colls[p.key] for p in batch if p.key not in items],
@@ -157,12 +159,7 @@ async def run_kometa_originals(ctx: JobContext) -> dict[str, Any]:
             for p in batch:
                 media_item_id = items.get(p.key)
                 collection_id = None if media_item_id else colls.get(p.key)
-                prefix = f"m{media_item_id}" if media_item_id else f"c{collection_id}"
-                # The id keeps the link; the title is only there to make the folder browsable.
-                label = labels.get(prefix)
-                filename = f"{prefix} - {label}" if label else prefix
-                rel = Path("assets") / "kometa" / f"{filename}.{p.suffix}"
-                await asyncio.to_thread(_write_asset, assets, prefix, config_dir / rel, p.data)
+                key = f"m{media_item_id}" if media_item_id else f"c{collection_id}"
                 existing = await session.scalar(
                     select(Artwork).where(
                         Artwork.source == "kometa",
@@ -171,6 +168,10 @@ async def run_kometa_originals(ctx: JobContext) -> dict[str, Any]:
                         else Artwork.collection_id == collection_id,
                     )
                 )
+                folder, stem = owners[key]
+                rel = artwork_path(key, folder, stem, "kometa", p.suffix, taken)
+                old = existing.file_path if existing else None
+                await asyncio.to_thread(write_asset, config_dir, rel, p.data, old)
                 art = existing or Artwork(
                     source="kometa", media_item_id=media_item_id, collection_id=collection_id
                 )
@@ -272,95 +273,6 @@ async def run_kometa_originals(ctx: JobContext) -> dict[str, Any]:
         "unmatched_examples": unmatched_examples,
         "issues": issues,
     }
-
-
-def _write_asset(folder: Path, prefix: str, dest: Path, data: bytes) -> None:
-    # Replace any earlier copy, whatever its title was then.
-    for old in [*folder.glob(f"{prefix}.*"), *folder.glob(f"{prefix} - *")]:
-        old.unlink()
-    dest.write_bytes(data)
-
-
-def safe_filename(text: str, limit: int = 120) -> str:
-    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', " ", text)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
-    return cleaned[:limit].rstrip(" .")
-
-
-async def _labels(
-    session: AsyncSession, item_ids: list[int], collection_ids: list[int]
-) -> dict[str, str]:
-    """Readable names for asset files: "Clerks (1994)", "Spaced - S01E02 - Title"..."""
-    out: dict[str, str] = {}
-    if item_ids:
-        rows = {
-            r.id: r
-            for r in (
-                await session.execute(
-                    select(
-                        MediaItem.id,
-                        MediaItem.kind,
-                        MediaItem.title,
-                        MediaItem.year,
-                        MediaItem.parent_id,
-                        MediaItem.season_number,
-                        MediaItem.episode_number,
-                    ).where(MediaItem.id.in_(item_ids))
-                )
-            ).all()
-        }
-        parent_ids = {r.parent_id for r in rows.values() if r.parent_id}
-        parents = (
-            {
-                r.id: r
-                for r in (
-                    await session.execute(
-                        select(
-                            MediaItem.id,
-                            MediaItem.title,
-                            MediaItem.year,
-                            MediaItem.parent_id,
-                            MediaItem.season_number,
-                        ).where(MediaItem.id.in_(parent_ids))
-                    )
-                ).all()
-            }
-            if parent_ids
-            else {}
-        )
-        show_ids = {p.parent_id for p in parents.values() if p.parent_id}
-        shows = (
-            dict(
-                (
-                    await session.execute(
-                        select(MediaItem.id, MediaItem.title).where(MediaItem.id.in_(show_ids))
-                    )
-                ).all()
-            )
-            if show_ids
-            else {}
-        )
-        for r in rows.values():
-            if r.kind in ("movie", "show"):
-                label = f"{r.title} ({r.year})" if r.year else r.title
-            elif r.kind == "season":
-                parent = parents.get(r.parent_id)
-                label = f"{parent.title if parent else 'Show'} - Season {r.season_number}"
-            else:
-                season = parents.get(r.parent_id)
-                show = shows.get(season.parent_id) if season else None
-                season_no = (season.season_number if season else 0) or 0
-                number = f"S{season_no:02d}E{r.episode_number or 0:02d}"
-                label = f"{show or 'Show'} - {number} - {r.title}"
-            out[f"m{r.id}"] = safe_filename(label)
-    if collection_ids:
-        for cid, name in (
-            await session.execute(
-                select(Collection.id, Collection.name).where(Collection.id.in_(collection_ids))
-            )
-        ).all():
-            out[f"c{cid}"] = safe_filename(name)
-    return out
 
 
 def _chunks(values: list[int], size: int) -> Iterator[list[int]]:

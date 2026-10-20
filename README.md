@@ -39,7 +39,7 @@ possible: it tracks what each server already has and only touches what actually 
   - *Original posters*: upload a zip of Kometa's `config/overlays/<Library> Original Posters`
     folders, or import them from a folder Coverarr can see (e.g. copy them into the config
     folder and import `/config/kometa`). Files are matched by Plex rating key and kept as clean
-    base posters in `config/assets/kometa/` (named like `m123 - Clerks (1994).jpg`).
+    base posters in the assets folder (see below).
   - *Collection files*: upload your Kometa collection YAML (plus `config.yml` to place them in
     the right library and bring over TMDb/Trakt keys). TMDb lists, TMDb collections and Trakt
     lists are understood; **Check** compares each list with your library and with the
@@ -70,7 +70,18 @@ possible: it tracks what each server already has and only touches what actually 
    - **Dashboard → Import from servers**, then **Scan posters**.
    - Work through **Review**.
 
-All state lives in `/config` (`coverarr.db` plus a thumbnail cache), so back up that folder.
+All state lives in `/config`, so back up that folder:
+
+```
+/config/
+  coverarr.db
+  assets/                          artwork Coverarr keeps (back this up)
+    movies/Clerks (1994) {tmdb-2292}/poster-kometa.jpg
+    tv/Spaced (1999) {tvdb-75592}/poster-kometa.jpg, season01-kometa.jpg, s01e02-kometa.jpg
+    collections/Cornetto Collection/poster-kometa.jpg
+    overlays/                      overlay images (coming with overlays)
+  cache/                           thumbnails and rendered posters; safe to delete
+```
 
 ## Development
 

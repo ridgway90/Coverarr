@@ -133,10 +133,10 @@ function OriginalsSection() {
       <p className="mt-1 text-sm text-muted">
         Kometa keeps the clean poster of everything it overlays in{" "}
         <code className="rounded bg-bg px-1">config/overlays/&lt;Library&gt; Original Posters</code>, named by Plex rating
-        key. Coverarr imports them as clean base posters, saved under{" "}
-        <code className="rounded bg-bg px-1">/config/assets/kometa</code> as e.g.{" "}
-        <code className="rounded bg-bg px-1">m123 - Clerks (1994).jpg</code>. They become the base wherever you haven't chosen
-        one (or chose Plex's overlaid poster).
+        key. Coverarr imports them as clean base posters into{" "}
+        <code className="rounded bg-bg px-1">/config/assets</code>, one folder per title, e.g.{" "}
+        <code className="rounded bg-bg px-1">movies/Clerks (1994) {"{tmdb-2292}"}/poster-kometa.jpg</code>. They become the base
+        wherever you haven't chosen one (or chose Plex's overlaid poster).
       </p>
 
       {plex.length > 1 && (
