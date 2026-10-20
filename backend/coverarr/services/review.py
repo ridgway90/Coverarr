@@ -2,6 +2,7 @@
 
 Issue types:
 
+* ``mismatch``                the same file is matched to different titles on different servers
 * ``item_missing``            a movie/show is absent (or unmatched) on some servers
 * ``poster_differs``          the same movie/show has visibly different posters per server
 * ``collection_missing``      a collection exists on some servers but not others
@@ -25,10 +26,17 @@ from coverarr.models import (
     ServerItem,
     ServerLibrary,
 )
+from coverarr.services.mismatch import compute_mismatches
 from coverarr.services.posters import hamming
 from coverarr.services.settings_store import get_setting
 
-ISSUE_TYPES = ("item_missing", "poster_differs", "collection_missing", "collection_members_differ")
+ISSUE_TYPES = (
+    "mismatch",
+    "item_missing",
+    "poster_differs",
+    "collection_missing",
+    "collection_members_differ",
+)
 MAX_LISTED_MEMBERS = 50
 
 
@@ -74,7 +82,8 @@ async def compute_issues(session: AsyncSession) -> dict[str, dict[str, Any]]:
     threshold = int(await get_setting(session, "poster_match_threshold"))
     lib_servers = await _library_servers(session)
     enabled = set(await session.scalars(select(Server.id).where(Server.enabled.is_(True))))
-    issues: dict[str, dict[str, Any]] = {}
+    # Titles caught up in a same-file mismatch aren't really missing; don't list them twice.
+    issues, mismatched = await compute_mismatches(session, enabled)
 
     # --- movies / shows ---------------------------------------------------------------------
     rows = (
@@ -115,7 +124,7 @@ async def compute_issues(session: AsyncSession) -> dict[str, dict[str, Any]]:
         for sid in present:
             on_server[sid].add(mi_id)
         missing = lib_servers.get(first.library_id, set()) - present
-        if missing:
+        if missing and mi_id not in mismatched:
             issues[f"item_missing:{mi_id}"] = {
                 "type": "item_missing",
                 "title": label,

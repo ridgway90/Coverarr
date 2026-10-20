@@ -8,12 +8,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from coverarr.models import AppSetting
 
 # Settings exposed through the settings API. Secrets are write-only from the UI's view.
-PUBLIC_KEYS = {"tmdb_api_key", "trakt_client_id", "trakt_client_secret", "poster_match_threshold"}
+PUBLIC_KEYS = {
+    "tmdb_api_key",
+    "trakt_client_id",
+    "trakt_client_secret",
+    "poster_match_threshold",
+    "server_load",
+}
 SECRET_KEYS = {"tmdb_api_key", "trakt_client_secret"}
 
 DEFAULTS: dict[str, Any] = {
     # Max Hamming distance (of 64 bits) for two posters to count as "the same image".
     "poster_match_threshold": 10,
+    # gentle | normal | fast, see services/load.py
+    "server_load": "normal",
 }
 
 

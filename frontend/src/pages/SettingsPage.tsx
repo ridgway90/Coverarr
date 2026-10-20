@@ -311,6 +311,7 @@ interface SettingsData {
   trakt_client_id: string | null;
   trakt_client_secret: { has_value: boolean };
   poster_match_threshold: number;
+  server_load: "gentle" | "normal" | "fast";
 }
 
 function GeneralTab() {
@@ -345,6 +346,16 @@ function GeneralTab() {
           <input className={inputClass} type="password" value={val("trakt_client_secret", "")} onChange={(e) => set("trakt_client_secret", e.target.value)} autoComplete="off" />
         </Field>
       </div>
+      <Field
+        label="Server load"
+        hint="How hard Coverarr works your media servers during imports and poster scans. Normal imports all servers at once; gentle goes one at a time with fewer parallel requests, useful if someone is streaming; fast suits capable servers."
+      >
+        <select className={selectClass} value={val("server_load", data.server_load)} onChange={(e) => set("server_load", e.target.value)}>
+          <option value="gentle">Gentle</option>
+          <option value="normal">Normal</option>
+          <option value="fast">Fast</option>
+        </select>
+      </Field>
       <Field
         label="Poster match sensitivity"
         hint="How different two posters can look (0–32) and still count as the same artwork. Higher ignores more change; 10 suits overlays like Kometa's."

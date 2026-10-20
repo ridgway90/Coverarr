@@ -156,10 +156,16 @@ async def match_top_level(
         links[row.id] = mi
         members[mi].append(row)
 
+    # Keep existing links first, best-supported items first: when a server re-matches an
+    # item, its row must join the item the other servers agree on rather than drag its old
+    # record along to the new ids (which would duplicate the title).
+    support = Counter(row.media_item_id for row in rows if row.media_item_id in existing)
     pending = []
-    for row in rows:
+    for row in sorted(rows, key=lambda r: -support.get(r.media_item_id, 0)):
         mi = row.media_item_id
-        if mi in existing and _compatible(agg_ids.get(mi, {}), _ids(row)):
+        ids = _ids(row)
+        claimed_elsewhere = any(index[k].get(v) not in (None, mi) for k, v in ids.items())
+        if mi in existing and _compatible(agg_ids.get(mi, {}), ids) and not claimed_elsewhere:
             register(mi, row)
         else:
             pending.append(row)

@@ -51,7 +51,7 @@ async def test_full_flow(app, authed, fake_servers):
     job = await run_job(app, client, "import")
     assert job["result"]["errors"] == {}
     assert job["result"]["servers"]["Plex"] == {
-        "movie": 10,
+        "movie": 11,
         "show": 2,
         "season": 5,
         "episode": 32,
@@ -61,13 +61,13 @@ async def test_full_flow(app, authed, fake_servers):
     # Plex "Films" and Jellyfin/Emby "Movies" land in one logical library.
     libs = (await client.get("/api/libraries")).json()
     assert sorted((lib["name"], lib["item_count"]) for lib in libs["libraries"]) == [
-        ("Films", 10),
+        ("Films", 12),  # "9" and Plex's mismatched "9 Songs" until fixed
         ("TV Programmes", 2),
     ]
     assert all(len(lib["server_libraries"]) == 3 for lib in libs["libraries"])
 
     dash = (await client.get("/api/dashboard")).json()
-    assert dash["counts"] == {"movie": 10, "show": 2, "season": 5, "episode": 32, "collection": 4}
+    assert dash["counts"] == {"movie": 12, "show": 2, "season": 5, "episode": 32, "collection": 4}
 
     films = next(lib for lib in libs["libraries"] if lib["name"] == "Films")
     # Arrival is missing on Emby; the id-less home video still matched by title + year.
@@ -213,3 +213,77 @@ async def test_show_detail_and_remap(app, authed, fake_servers):
     assert sorted(lib["name"] for lib in libs) == ["Emby TV", "Films", "TV Programmes"]
     emby_tv = next(lib for lib in libs if lib["name"] == "Emby TV")
     assert emby_tv["item_count"] == 2
+
+
+async def test_mismatch_suggest_and_fix(app, authed, fake_servers):
+    client = authed
+    server_ids = await add_servers(client)
+    await run_job(app, client, "import")
+
+    [issue] = await issues(client, "mismatch")
+    d = issue["details"]
+    assert "9 (2009) {tmdb-12244}" in d["path"]
+    assert d["hints"]["tmdb_id"] == "12244"
+    by_title = {c["title"]: c for c in d["candidates"]}
+    assert set(by_title) == {"9", "9 Songs"}
+    assert by_title["9 Songs"]["servers"] == [server_ids["plex"]]
+    assert d["suggested"] == by_title["9"]["media_item_id"]
+    assert d["confidence"] == "high"
+    assert "2 of 3 servers agree" in by_title["9"]["reasons"]
+    # Titles in a mismatch aren't also reported as missing.
+    assert [i["title"] for i in await issues(client, "item_missing")] == ["Arrival (2016)"]
+
+    bad = await client.post(
+        f"/api/review/issues/{issue['id']}/fix-match", json={"target": {"tmdb_id": "abc"}}
+    )
+    assert bad.status_code == 422
+    chosen = by_title["9"]
+    resp = await client.post(
+        f"/api/review/issues/{issue['id']}/fix-match",
+        json={"target": {k: chosen[k] for k in ("tmdb_id", "imdb_id", "title", "year")}},
+    )
+    assert resp.status_code == 200, resp.text
+    await app.state.jobs.wait_idle()
+    job = (await client.get(f"/api/jobs/{resp.json()['job_id']}")).json()
+    assert job["status"] == "succeeded", job
+    assert job["result"]["fixed"] == 1
+
+    plex_item = next(
+        i for i in fake_servers["plex"].items.values() if "{tmdb-12244}" in (i.file or "")
+    )
+    assert (plex_item.title, plex_item.ids["tmdb"]) == ("9", "12244")
+    assert await issues(client, "mismatch") == []
+    libs = (await client.get("/api/libraries")).json()["libraries"]
+    films = next(lib for lib in libs if lib["name"] == "Films")
+    assert films["item_count"] == 11
+    page = (await client.get("/api/items", params={"library_id": films["id"], "q": "9"})).json()
+    nine = next(i for i in page["items"] if i["title"] == "9")
+    assert sorted(s["server_id"] for s in nine["servers"]) == sorted(server_ids.values())
+
+
+async def test_gentle_profile_and_show_paths(app, authed, fake_servers):
+    from sqlalchemy import select
+
+    from coverarr.db import session_factory
+    from coverarr.models import ServerItem
+
+    client = authed
+    resp = await client.put("/api/settings", json={"server_load": "gentle"})
+    assert resp.json()["server_load"] == "gentle"
+    assert (await client.put("/api/settings", json={"server_load": "turbo"})).status_code == 422
+    server_ids = await add_servers(client)
+    job = await run_job(app, client, "import")
+    assert job["result"]["errors"] == {}
+
+    async with session_factory()() as session:
+        plex_shows = await session.scalars(
+            select(ServerItem).where(
+                ServerItem.server_id == server_ids["plex"], ServerItem.kind == "show"
+            )
+        )
+        # Plex listings carry no show folder; it's derived from the episode files.
+        paths = sorted(s.path for s in plex_shows)
+    assert paths == [
+        "/data/media/TV/Black Books (2000) {tvdb-72216}",
+        "/data/media/TV/Spaced (1999) {tvdb-75592}",
+    ]

@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from coverarr.clients.base import (
     ItemKind,
+    MatchTarget,
     MediaServerClient,
     MediaServerError,
     RemoteCollection,
@@ -41,6 +42,18 @@ def parse_plex_guids(meta: dict[str, Any]) -> dict[str, str]:
 
 def _tags(meta: dict[str, Any], key: str) -> list[str]:
     return [t["tag"] for t in meta.get(key) or [] if t.get("tag")]
+
+
+def _media_path(meta: dict[str, Any]) -> str | None:
+    """First file of a movie/episode, or the folder of a show."""
+    for media in meta.get("Media") or []:
+        for part in media.get("Part") or []:
+            if part.get("file"):
+                return part["file"]
+    for location in meta.get("Location") or []:
+        if location.get("path"):
+            return location["path"]
+    return None
 
 
 class PlexClient(MediaServerClient):
@@ -151,6 +164,7 @@ class PlexClient(MediaServerClient):
             poster_ref=meta.get("thumb"),
             labels=labels,
         )
+        item.path = _media_path(meta)
         if kind in ("movie", "show"):
             ids = parse_plex_guids(meta)
             item.tmdb_id, item.tvdb_id, item.imdb_id = (
@@ -167,6 +181,46 @@ class PlexClient(MediaServerClient):
             item.season_number = to_int(meta.get("parentIndex"))
             item.episode_number = to_int(meta.get("index"))
         return item
+
+    async def get_item(self, item_id: str, kind: ItemKind) -> RemoteItem:
+        container = await self._container(f"/library/metadata/{item_id}", {"includeGuids": 1})
+        rows = container.get("Metadata") or []
+        if not rows:
+            raise MediaServerError(f"plex: item {item_id} not found")
+        return self._to_item(rows[0], kind, set())
+
+    async def fix_match(self, item_id: str, kind: ItemKind, target: MatchTarget) -> str:
+        # Plex's match search accepts "tmdb-123" / "tvdb-123" / "imdb-tt123" as the title,
+        # which pins the exact entry; title + year is the fallback.
+        queries: list[tuple[str, int | None]] = [
+            (f"{key}-{value}", None) for key, value in target.ids().items()
+        ]
+        if target.title:
+            queries.append((target.title, target.year))
+        for query, year in queries:
+            params: dict[str, Any] = {"manual": 1, "title": query}
+            if year:
+                params["year"] = year
+            container = await self._container(f"/library/metadata/{item_id}/matches", params)
+            results = sorted(
+                container.get("SearchResult") or [],
+                key=lambda r: to_int(r.get("score")) or 0,
+                reverse=True,
+            )
+            if not results:
+                continue
+            pick = results[0]
+            await self._request(
+                "PUT",
+                f"/library/metadata/{item_id}/match",
+                params={
+                    "guid": pick["guid"],
+                    "name": pick.get("name", ""),
+                    "year": pick.get("year", ""),
+                },
+            )
+            return f"{pick.get('name')} ({pick.get('year')})"
+        raise MediaServerError("plex: no match found for " + (target.title or str(target.ids())))
 
     async def collections(self, libraries: list[RemoteLibrary]) -> list[RemoteCollection]:
         result: list[RemoteCollection] = []
