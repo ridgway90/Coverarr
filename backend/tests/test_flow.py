@@ -50,6 +50,8 @@ async def test_full_flow(app, authed, fake_servers):
 
     job = await run_job(app, client, "import")
     assert job["result"]["errors"] == {}
+    # Times carry an explicit UTC offset so browsers don't read them as local time.
+    assert job["started_at"].endswith("+00:00") and job["finished_at"].endswith("+00:00")
     assert job["result"]["servers"]["Plex"] == {
         "movie": 11,
         "show": 2,
