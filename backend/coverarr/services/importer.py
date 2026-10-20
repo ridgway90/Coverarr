@@ -241,12 +241,16 @@ async def run_import(ctx: JobContext) -> dict[str, Any]:
 
     result: dict[str, Any] = {"servers": {}, "errors": {}}
     span = 0.85 / len(servers)
+    status = ctx.state["servers"] = {str(server_id): "waiting" for server_id, _ in servers}
     for idx, (server_id, name) in enumerate(servers):
+        status[str(server_id)] = "importing"
         try:
             result["servers"][name] = await import_server(
                 ctx, server_id, ctx.job_id, idx * span, span
             )
+            status[str(server_id)] = "done"
         except Exception as exc:
+            status[str(server_id)] = "failed"
             if not isinstance(exc, MediaServerError):
                 log.exception("Import from %s failed", name)
             result["errors"][name] = str(exc)

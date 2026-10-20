@@ -33,6 +33,8 @@ class JobContext:
         self.log_lines: list[str] = []
         self.fraction = 0.0
         self.message: str | None = None
+        # Structured live status for the UI, e.g. per-server import state.
+        self.state: dict[str, Any] = {}
 
     async def progress(self, fraction: float, message: str | None = None) -> None:
         self.fraction = max(0.0, min(1.0, fraction))

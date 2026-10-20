@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, DownloadCloud, Fingerprint, ServerCog } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, DownloadCloud, Fingerprint, Loader2, ServerCog } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button, Card, EmptyState, KIND_LABEL, PageHeader, ServerChip, Spinner, formatDate } from "../components/ui";
 import { api, type IssueType } from "../lib/api";
@@ -26,6 +26,15 @@ export default function DashboardPage() {
   if (isLoading || !dashboard) return <Spinner label="Loading" />;
 
   const busy = (kind: string) => active.some((j) => j.kind === kind);
+  const importJob = active.find((j) => j.kind === "import");
+  // While an import runs, show each server's progress instead of its last connection check.
+  const importState = (serverId: number) => {
+    if (!importJob) return null;
+    const targets = importJob.params.server_ids as number[] | undefined;
+    if (targets && !targets.includes(serverId)) return null;
+    if (importJob.status === "queued") return "waiting";
+    return importJob.state?.servers?.[String(serverId)] ?? "waiting";
+  };
   const counts = dashboard.counts;
   const totalIssues = Object.values(dashboard.issues).reduce((a, b) => a + (b ?? 0), 0);
 
@@ -50,7 +59,11 @@ export default function DashboardPage() {
     <>
       <PageHeader
         title="Dashboard"
-        subtitle={`Last import: ${formatDate(dashboard.last_import?.finished_at)}`}
+        subtitle={
+          importJob
+            ? `Import running${importJob.message ? `: ${importJob.message}` : ""}`
+            : `Last import: ${formatDate(dashboard.last_import?.finished_at)}`
+        }
         actions={
           <>
             <Button
@@ -103,7 +116,15 @@ export default function DashboardPage() {
                     {KIND_LABEL[s.kind]} {s.version ?? ""} · {s.items.toLocaleString()} movies &amp; shows
                   </div>
                 </div>
-                {s.last_error ? (
+                {importState(s.id) === "importing" ? (
+                  <span className="flex items-center gap-1 text-xs text-warn">
+                    <Loader2 className="size-4 animate-spin" /> Importing
+                  </span>
+                ) : importState(s.id) === "waiting" ? (
+                  <span className="flex items-center gap-1 text-xs text-warn">
+                    <Clock className="size-4" /> Waiting to import
+                  </span>
+                ) : s.last_error ? (
                   <span className="flex items-center gap-1 text-xs text-danger" title={s.last_error}>
                     <AlertTriangle className="size-4" /> Error
                   </span>

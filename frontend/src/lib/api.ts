@@ -197,6 +197,7 @@ export interface Job {
   progress: number;
   message: string | null;
   params: Record<string, unknown>;
+  state?: { servers?: Record<string, "waiting" | "importing" | "done" | "failed"> };
   result: Record<string, any> | null;
   error: string | null;
   created_at: string;
