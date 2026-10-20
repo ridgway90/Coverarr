@@ -103,6 +103,10 @@ npm install
 npm run dev
 ```
 
+CI also runs `scripts/scan-unicode.py` (shared with PEMForge) on every push and pull request.
+It blocks bidirectional controls, invisible characters and homoglyph letters that a diff review
+can't see. Run it locally with `python3 scripts/scan-unicode.py --verbose`.
+
 Layout:
 
 ```
