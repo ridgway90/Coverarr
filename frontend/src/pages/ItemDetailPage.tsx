@@ -17,8 +17,7 @@ export default function ItemDetailPage() {
     queryFn: () => api.get<ItemDetail>(`/api/items/${itemId}`),
   });
   const choose = useMutation({
-    mutationFn: (serverId: number | null) =>
-      api.put(`/api/items/${itemId}/poster-source`, { poster_source: serverId === null ? null : `server:${serverId}` }),
+    mutationFn: (source: string | null) => api.put(`/api/items/${itemId}/poster-source`, { poster_source: source }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["item", itemId] });
       qc.invalidateQueries({ queryKey: ["items"] });
@@ -75,6 +74,7 @@ export default function ItemDetailPage() {
           <PosterChooser
             title={item.title}
             presence={item.servers}
+            artwork={item.artwork}
             servers={servers}
             posterSource={item.poster_source}
             onChoose={(id) => choose.mutate(id)}

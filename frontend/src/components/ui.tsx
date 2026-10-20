@@ -1,6 +1,6 @@
 import { ImageOff, Loader2, X } from "lucide-react";
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
-import { posterUrl, type Presence, type Server, type ServerKind } from "../lib/api";
+import { posterUrl, type PosterRef, type Server, type ServerKind } from "../lib/api";
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(" ");
@@ -200,7 +200,7 @@ export function Poster({
   width = 300,
   className,
 }: {
-  presence: Presence | null | undefined;
+  presence: PosterRef | null | undefined;
   alt: string;
   width?: number;
   className?: string;

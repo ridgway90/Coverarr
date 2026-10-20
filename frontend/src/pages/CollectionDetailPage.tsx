@@ -23,8 +23,7 @@ export default function CollectionDetailPage() {
     for (const key of ["collection", "collections", "issues", "review", "dashboard"]) qc.invalidateQueries({ queryKey: [key] });
   };
   const choose = useMutation({
-    mutationFn: (serverId: number | null) =>
-      api.put(`/api/collections/${collectionId}/poster-source`, { poster_source: serverId === null ? null : `server:${serverId}` }),
+    mutationFn: (source: string | null) => api.put(`/api/collections/${collectionId}/poster-source`, { poster_source: source }),
     onSuccess: refresh,
   });
   const sync = useMutation({
@@ -85,6 +84,7 @@ export default function CollectionDetailPage() {
           <PosterChooser
             title={coll.name}
             presence={coll.servers}
+            artwork={coll.artwork}
             servers={servers}
             posterSource={coll.poster_source}
             onChoose={(id) => choose.mutate(id)}

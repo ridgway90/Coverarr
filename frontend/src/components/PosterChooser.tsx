@@ -1,11 +1,18 @@
 import { CheckCircle2, Layers } from "lucide-react";
-import type { Presence, Server } from "../lib/api";
+import type { Artwork, Presence, Server } from "../lib/api";
 import { Button, Poster, ServerChip, cx } from "./ui";
 
-/** Side-by-side posters from each server, with a button to make one the clean base. */
+const ARTWORK_LABELS: Record<string, string> = {
+  kometa: "Kometa original",
+  upload: "Uploaded",
+  tmdb: "TMDb",
+};
+
+/** Posters on each server plus artwork Coverarr holds, with a button to make one the base. */
 export default function PosterChooser({
   title,
   presence,
+  artwork = [],
   servers,
   posterSource,
   onChoose,
@@ -13,28 +20,53 @@ export default function PosterChooser({
 }: {
   title: string;
   presence: Presence[];
+  artwork?: Artwork[];
   servers: Map<number, Server>;
   posterSource: string | null;
-  onChoose: (serverId: number | null) => void;
+  /** "server:<id>", "artwork:<id>", or null to clear. */
+  onChoose: (source: string | null) => void;
   busy?: boolean;
 }) {
-  const chosen = posterSource?.startsWith("server:") ? Number(posterSource.split(":")[1]) : null;
+  const options: {
+    key: string;
+    presence: Presence | Artwork;
+    label: string;
+    chip: Server | null;
+    note: string | null;
+  }[] = [
+    ...artwork.map((a) => ({
+      key: `artwork:${a.artwork_id}`,
+      presence: a,
+      label: ARTWORK_LABELS[a.source] ?? "Artwork",
+      chip: null,
+      note: a.width && a.height ? `${a.width}×${a.height} · clean, no overlays` : "Clean, no overlays",
+    })),
+    ...presence.map((p) => {
+      const server = servers.get(p.server_id) ?? null;
+      return {
+        key: `server:${p.server_id}`,
+        presence: p,
+        label: server?.name ?? "Server",
+        chip: server,
+        note: p.kometa_overlay ? "Has Kometa overlay" : null,
+      };
+    }),
+  ];
   return (
     <div>
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-        {presence.map((p) => {
-          const server = servers.get(p.server_id);
-          const isChosen = chosen === p.server_id;
+        {options.map((o) => {
+          const isChosen = posterSource === o.key;
           return (
-            <div key={p.server_id} className={cx("rounded-lg border p-2", isChosen ? "border-accent bg-accent/5" : "border-line")}>
-              <Poster presence={p} alt={`${title} on ${server?.name ?? "server"}`} width={400} />
+            <div key={o.key} className={cx("rounded-lg border p-2", isChosen ? "border-accent bg-accent/5" : "border-line")}>
+              <Poster presence={o.presence} alt={`${title}: ${o.label}`} width={400} />
               <div className="mt-2 flex items-center gap-2 text-sm">
-                {server && <ServerChip server={server} />}
-                <span className="truncate font-medium">{server?.name}</span>
+                {o.chip ? <ServerChip server={o.chip} /> : <span className="rounded bg-accent/20 px-1 text-[10px] font-bold uppercase text-accent">CV</span>}
+                <span className="truncate font-medium">{o.label}</span>
               </div>
-              {p.kometa_overlay && (
-                <div className="mt-1 flex items-center gap-1 text-xs text-warn" title="Kometa has drawn overlays on this poster">
-                  <Layers className="size-3.5" /> Has Kometa overlay
+              {o.note && (
+                <div className={cx("mt-1 flex items-center gap-1 text-xs", o.presence.kometa_overlay ? "text-warn" : "text-muted")}>
+                  {o.presence.kometa_overlay && <Layers className="size-3.5" />} {o.note}
                 </div>
               )}
               <div className="mt-2">
@@ -43,7 +75,7 @@ export default function PosterChooser({
                     <CheckCircle2 className="size-4" /> Base poster
                   </div>
                 ) : (
-                  <Button size="sm" className="w-full" disabled={!p.has_poster || busy} onClick={() => onChoose(p.server_id)}>
+                  <Button size="sm" className="w-full" disabled={!o.presence.has_poster || busy} onClick={() => onChoose(o.key)}>
                     Use as base
                   </Button>
                 )}
@@ -52,8 +84,8 @@ export default function PosterChooser({
           );
         })}
       </div>
-      {chosen !== null && (
-        <button className="mt-3 text-xs text-muted hover:text-text underline" onClick={() => onChoose(null)} disabled={busy}>
+      {posterSource && (
+        <button className="mt-3 text-xs text-muted underline hover:text-text" onClick={() => onChoose(null)} disabled={busy}>
           Clear base poster choice
         </button>
       )}

@@ -105,6 +105,20 @@ export interface Presence {
   kometa_overlay: boolean;
 }
 
+/** A clean image Coverarr holds itself (e.g. a Kometa original). */
+export interface Artwork {
+  artwork_id: number;
+  server_id: null;
+  source: string;
+  has_poster: boolean;
+  poster_version: string;
+  kometa_overlay: boolean;
+  width: number | null;
+  height: number | null;
+}
+
+export type PosterRef = Presence | Artwork;
+
 export interface ItemSummary {
   id: number;
   kind: string;
@@ -112,7 +126,7 @@ export interface ItemSummary {
   year: number | null;
   poster_source: string | null;
   servers: Presence[];
-  poster: Presence | null;
+  poster: PosterRef | null;
   issues: string[];
 }
 
@@ -154,6 +168,7 @@ export interface ItemDetail extends Omit<ItemSummary, "issues"> {
   tvdb_id: string | null;
   imdb_id: string | null;
   seasons: Season[];
+  artwork: Artwork[];
   collections: { id: number; name: string }[];
   issues: Issue[];
 }
@@ -174,7 +189,7 @@ export interface CollectionSummary {
   sort_title: string | null;
   poster_source: string | null;
   servers: CollectionServer[];
-  poster: CollectionServer | null;
+  poster: CollectionServer | Artwork | null;
   issues: string[];
 }
 
@@ -184,11 +199,12 @@ export interface CollectionMember {
   year: number | null;
   in_collection_on: number[];
   servers: Presence[];
-  poster: Presence | null;
+  poster: PosterRef | null;
 }
 
 export interface CollectionDetail extends Omit<CollectionSummary, "issues"> {
   summary: string | null;
+  artwork: Artwork[];
   members: CollectionMember[];
   issues: Issue[];
 }
@@ -221,8 +237,11 @@ export interface Dashboard {
 
 export type ReviewSummary = Record<IssueType, { open: number; ignored: number }>;
 
-export function posterUrl(p: Presence | null | undefined, width = 300): string | null {
+export function posterUrl(p: PosterRef | null | undefined, width = 300): string | null {
   if (!p || !p.has_poster) return null;
+  if ("artwork_id" in p) {
+    return `/api/images/artwork/${p.artwork_id}?w=${width}&v=${encodeURIComponent(p.poster_version)}`;
+  }
   if (p.server_collection_id !== undefined && p.server_item_id === undefined) {
     return `/api/images/collection/${p.server_collection_id}?w=${width}&v=${encodeURIComponent(p.poster_version)}`;
   }

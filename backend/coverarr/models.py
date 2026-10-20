@@ -293,3 +293,54 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class Artwork(Base):
+    """A clean base image Coverarr keeps itself (a Kometa original, later uploads/TMDb).
+
+    Files live under ``<config>/assets``; ``file_path`` is relative to the config dir.
+    """
+
+    __tablename__ = "artwork"
+    __table_args__ = (
+        Index("ix_artwork_media", "media_item_id"),
+        Index("ix_artwork_collection", "collection_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    media_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("media_items.id", ondelete="CASCADE")
+    )
+    collection_id: Mapped[int | None] = mapped_column(
+        ForeignKey("collections.id", ondelete="CASCADE")
+    )
+    source: Mapped[str] = mapped_column(String(20))  # kometa | upload | tmdb
+    file_path: Mapped[str] = mapped_column(String(1000))
+    original_name: Mapped[str | None] = mapped_column(String(500))
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    poster_hash: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class CollectionDefinition(Base):
+    """A collection defined by rules (e.g. imported from a Kometa YAML file)."""
+
+    __tablename__ = "collection_definitions"
+    __table_args__ = (UniqueConstraint("library_id", "name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    library_id: Mapped[int | None] = mapped_column(ForeignKey("libraries.id", ondelete="SET NULL"))
+    name: Mapped[str] = mapped_column(String(500))
+    source: Mapped[str] = mapped_column(String(20), default="kometa")
+    source_file: Mapped[str | None] = mapped_column(String(300))
+    # [{"type": "tmdb_list", "value": "8694016"}, {"type": "trakt_list", "value": "https://..."}]
+    builders: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    # sync_mode, collection_order, sort_title, label, summary, ...
+    options: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Kometa keys Coverarr doesn't support (yet), kept so nothing is silently dropped.
+    unsupported: Mapped[list[str]] = mapped_column(JSON, default=list)
+    check_result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)

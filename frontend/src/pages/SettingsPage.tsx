@@ -16,10 +16,11 @@ import {
   inputClass,
   selectClass,
 } from "../components/ui";
+import KometaImport from "../components/KometaImport";
 import { api, type Server, type ServerKind, type ServerLibrary, type TestResult } from "../lib/api";
 import { useLibraries, useServers } from "../lib/hooks";
 
-type Tab = "servers" | "libraries" | "general";
+type Tab = "servers" | "libraries" | "kometa" | "general";
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>("servers");
@@ -32,11 +33,13 @@ export default function SettingsPage() {
         tabs={[
           { id: "servers", label: "Media servers" },
           { id: "libraries", label: "Library mapping" },
+          { id: "kometa", label: "Import from Kometa" },
           { id: "general", label: "General" },
         ]}
       />
       {tab === "servers" && <ServersTab />}
       {tab === "libraries" && <LibrariesTab />}
+      {tab === "kometa" && <KometaImport />}
       {tab === "general" && <GeneralTab />}
     </>
   );

@@ -169,6 +169,15 @@ class ThumbnailCache:
         await asyncio.to_thread(self._store, path, data, width)
         return path
 
+    async def get_local(self, key: str, source: Path, width: int) -> Path:
+        """A resized copy of an image Coverarr holds itself (e.g. a Kometa original)."""
+        stat = await asyncio.to_thread(source.stat)
+        path = self.path_for(0, key, str(stat.st_mtime_ns), width)
+        if not path.exists():
+            data = await asyncio.to_thread(source.read_bytes)
+            await asyncio.to_thread(self._store, path, data, width)
+        return path
+
     @staticmethod
     def _store(path: Path, data: bytes, width: int) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
