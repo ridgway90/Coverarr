@@ -15,6 +15,7 @@ from coverarr.config import Settings, get_settings
 from coverarr.db import dispose_engine, init_engine, run_migrations, session_factory
 from coverarr.security import current_user
 from coverarr.services.actions import run_collection_rename, run_collection_sync, run_fix_match
+from coverarr.services.assets import relocate_artwork
 from coverarr.services.client_pool import ClientPool
 from coverarr.services.definitions import run_check_definitions
 from coverarr.services.importer import run_import, run_rematch
@@ -38,6 +39,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
         sm = session_factory()
         async with sm() as session:
             app.state.secret_key = await ensure_secret(session, "secret_key")
+        await relocate_artwork(sm, config.config_dir)
         runner = JobRunner(sm)
         runner.register("import", run_import)
         runner.register("rematch", run_rematch)
