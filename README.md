@@ -35,6 +35,15 @@ possible: it tracks what each server already has and only touches what actually 
   changes, so re-scans only download posters that changed, and thumbnails are cached on disk.
   A full import of ~3,800 movies, 700 shows, 28,000 episodes and 480 collections across three
   servers takes well under a minute.
+- **Import from Kometa** (Settings → Import from Kometa):
+  - *Original posters*: upload a zip of Kometa's `config/overlays/<Library> Original Posters`
+    folders, or import them from a folder Coverarr can see (e.g. copy them into the config
+    folder and import `/config/kometa`). Files are matched by Plex rating key and kept as clean
+    base posters in `config/assets/kometa/` (named like `m123 - Clerks (1994).jpg`).
+  - *Collection files*: upload your Kometa collection YAML (plus `config.yml` to place them in
+    the right library and bring over TMDb/Trakt keys). TMDb lists, TMDb collections and Trakt
+    lists are understood; **Check** compares each list with your library and with the
+    collection Kometa built on each server.
 - **Server load setting** (gentle / normal / fast). Normal imports all servers at once;
   gentle goes one at a time with fewer parallel requests.
 - Single admin login, activity log for every import, scan and change pushed to a server.

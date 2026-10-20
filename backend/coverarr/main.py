@@ -10,14 +10,16 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from coverarr import __version__
-from coverarr.api import auth, jobs, library, review, servers, settings
+from coverarr.api import auth, jobs, kometa, library, review, servers, settings
 from coverarr.config import Settings, get_settings
 from coverarr.db import dispose_engine, init_engine, run_migrations, session_factory
 from coverarr.security import current_user
 from coverarr.services.actions import run_collection_rename, run_collection_sync, run_fix_match
 from coverarr.services.client_pool import ClientPool
+from coverarr.services.definitions import run_check_definitions
 from coverarr.services.importer import run_import, run_rematch
 from coverarr.services.jobs import JobRunner
+from coverarr.services.kometa import run_kometa_originals
 from coverarr.services.posters import ThumbnailCache, run_poster_scan
 from coverarr.services.settings_store import ensure_secret
 
@@ -43,6 +45,8 @@ def create_app(config: Settings | None = None) -> FastAPI:
         runner.register("collection_sync", run_collection_sync)
         runner.register("fix_match", run_fix_match)
         runner.register("collection_rename", run_collection_rename)
+        runner.register("kometa_originals", run_kometa_originals)
+        runner.register("check_definitions", run_check_definitions)
         await runner.start()
         app.state.jobs = runner
         app.state.client_pool = ClientPool()
@@ -55,9 +59,10 @@ def create_app(config: Settings | None = None) -> FastAPI:
             await dispose_engine()
 
     app = FastAPI(title="Coverarr", version=__version__, lifespan=lifespan)
+    app.state.config = config
     app.include_router(auth.router)
     protected = [Depends(current_user)]
-    for module in (servers, settings, library, review, jobs):
+    for module in (servers, settings, library, review, jobs, kometa):
         app.include_router(module.router, dependencies=protected)
 
     @app.get("/api/health")

@@ -48,6 +48,8 @@ export const JOB_LABELS: Record<string, string> = {
   collection_sync: "Update collections",
   fix_match: "Fix match",
   collection_rename: "Rename collection",
+  kometa_originals: "Import Kometa originals",
+  check_definitions: "Check collection lists",
 };
 
 export function jobLabel(job: Pick<Job, "kind">): string {

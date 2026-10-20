@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from coverarr.clients import MediaServerError
 from coverarr.db import get_session
 from coverarr.models import (
+    Artwork,
     Collection,
     Issue,
     Library,
@@ -147,8 +148,48 @@ def _presence(si: ServerItem) -> dict[str, Any]:
     }
 
 
-def preferred_poster(presence: list[dict[str, Any]], poster_source: str | None) -> dict | None:
-    """Pick which server's poster to show: the chosen source, else a clean one, else any."""
+def _artwork_out(art: Artwork) -> dict[str, Any]:
+    return {
+        "artwork_id": art.id,
+        "server_id": None,
+        "source": art.source,
+        "has_poster": True,
+        "poster_version": f"{art.id}-{int(art.created_at.timestamp())}",
+        "kometa_overlay": False,
+        "width": art.width,
+        "height": art.height,
+    }
+
+
+async def _artworks_for(
+    session: AsyncSession, *, item_ids: list[int] | None = None, coll_ids: list[int] | None = None
+) -> dict[int, list[dict[str, Any]]]:
+    """Coverarr-held artwork per media item (or per collection)."""
+    out: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    if item_ids:
+        for art in await session.scalars(
+            select(Artwork).where(Artwork.media_item_id.in_(item_ids))
+        ):
+            out[art.media_item_id].append(_artwork_out(art))
+    if coll_ids:
+        for art in await session.scalars(
+            select(Artwork).where(Artwork.collection_id.in_(coll_ids))
+        ):
+            out[art.collection_id].append(_artwork_out(art))
+    return out
+
+
+def preferred_poster(
+    presence: list[dict[str, Any]],
+    poster_source: str | None,
+    artworks: list[dict[str, Any]] | None = None,
+) -> dict | None:
+    """Pick the poster to show: the chosen source, else a clean one, else any."""
+    if poster_source and poster_source.startswith("artwork:"):
+        art_id = int(poster_source.split(":", 1)[1])
+        for art in artworks or []:
+            if art["artwork_id"] == art_id:
+                return art
     with_poster = [p for p in presence if p["has_poster"]]
     if poster_source and poster_source.startswith("server:"):
         sid = int(poster_source.split(":", 1)[1])
@@ -198,6 +239,7 @@ async def list_items(
         )
     )
     presence = await _presence_for(session, [i.id for i in items])
+    artworks = await _artworks_for(session, item_ids=[i.id for i in items])
     open_issues = await _issue_types_for(session, [i.id for i in items])
     return {
         "total": total,
@@ -211,7 +253,9 @@ async def list_items(
                 "year": i.year,
                 "poster_source": i.poster_source,
                 "servers": presence.get(i.id, []),
-                "poster": preferred_poster(presence.get(i.id, []), i.poster_source),
+                "poster": preferred_poster(
+                    presence.get(i.id, []), i.poster_source, artworks.get(i.id)
+                ),
                 "issues": open_issues.get(i.id, []),
             }
             for i in items
@@ -283,6 +327,7 @@ async def get_item(item_id: int, session: AsyncSession = Depends(get_session)):
             for s in seasons
         ]
     collections = await _collections_containing(session, item.id)
+    artwork = (await _artworks_for(session, item_ids=[item.id])).get(item.id, [])
     issues = list(await session.scalars(select(Issue).where(Issue.media_item_id == item.id)))
     return {
         "id": item.id,
@@ -295,7 +340,8 @@ async def get_item(item_id: int, session: AsyncSession = Depends(get_session)):
         "imdb_id": item.imdb_id,
         "poster_source": item.poster_source,
         "servers": presence,
-        "poster": preferred_poster(presence, item.poster_source),
+        "artwork": artwork,
+        "poster": preferred_poster(presence, item.poster_source, artwork),
         "seasons": children,
         "collections": collections,
         "issues": [_issue_out(i) for i in issues],
@@ -332,12 +378,28 @@ class PosterSource(BaseModel):
     poster_source: str | None
 
 
-async def _validate_source(session: AsyncSession, source: str | None) -> None:
+async def _validate_source(
+    session: AsyncSession,
+    source: str | None,
+    *,
+    media_item_id: int | None = None,
+    collection_id: int | None = None,
+) -> None:
     if source is None:
         return
     kind, _, value = source.partition(":")
-    if kind != "server" or not value.isdigit() or not await session.get(Server, int(value)):
-        raise HTTPException(422, "poster_source must be 'server:<id>' for an existing server")
+    if not value.isdigit():
+        raise HTTPException(422, "poster_source must be 'server:<id>' or 'artwork:<id>'")
+    if kind == "server" and await session.get(Server, int(value)):
+        return
+    if kind == "artwork":
+        art = await session.get(Artwork, int(value))
+        if art and (
+            (media_item_id is not None and art.media_item_id == media_item_id)
+            or (collection_id is not None and art.collection_id == collection_id)
+        ):
+            return
+    raise HTTPException(422, "poster_source must be an existing server or this title's artwork")
 
 
 @router.put("/items/{item_id}/poster-source")
@@ -347,7 +409,7 @@ async def set_item_poster_source(
     item = await session.get(MediaItem, item_id)
     if item is None:
         raise HTTPException(404, "Item not found")
-    await _validate_source(session, body.poster_source)
+    await _validate_source(session, body.poster_source, media_item_id=item.id)
     item.poster_source = body.poster_source
     if body.poster_source:
         await _close_poster_issue(session, media_item_id=item.id)
@@ -453,6 +515,7 @@ async def list_collections(
     issue_map: dict[int, list[str]] = defaultdict(list)
     for cid, t in issue_rows:
         issue_map[cid].append(t)
+    artworks = await _artworks_for(session, coll_ids=ids)
     return [
         {
             "id": c.id,
@@ -461,7 +524,7 @@ async def list_collections(
             "sort_title": c.sort_title,
             "poster_source": c.poster_source,
             "servers": by_coll.get(c.id, []),
-            "poster": preferred_poster(by_coll.get(c.id, []), c.poster_source),
+            "poster": preferred_poster(by_coll.get(c.id, []), c.poster_source, artworks.get(c.id)),
             "issues": issue_map.get(c.id, []),
         }
         for c in colls
@@ -488,6 +551,8 @@ async def get_collection(collection_id: int, session: AsyncSession = Depends(get
         for i in await session.scalars(select(MediaItem).where(MediaItem.id.in_(all_members)))
     }
     presence = await _presence_for(session, all_members)
+    member_art = await _artworks_for(session, item_ids=all_members)
+    artwork = (await _artworks_for(session, coll_ids=[coll.id])).get(coll.id, [])
     members = sorted(
         (
             {
@@ -498,7 +563,9 @@ async def get_collection(collection_id: int, session: AsyncSession = Depends(get
                     s["server_id"] for s in servers if mid in s["matched_members"]
                 ],
                 "servers": presence.get(mid, []),
-                "poster": preferred_poster(presence.get(mid, []), items[mid].poster_source),
+                "poster": preferred_poster(
+                    presence.get(mid, []), items[mid].poster_source, member_art.get(mid)
+                ),
             }
             for mid in all_members
             if mid in items
@@ -516,7 +583,8 @@ async def get_collection(collection_id: int, session: AsyncSession = Depends(get
         "summary": coll.summary,
         "poster_source": coll.poster_source,
         "servers": servers,
-        "poster": preferred_poster(servers, coll.poster_source),
+        "artwork": artwork,
+        "poster": preferred_poster(servers, coll.poster_source, artwork),
         "members": members,
         "issues": [_issue_out(i) for i in issues],
     }
@@ -529,7 +597,7 @@ async def set_collection_poster_source(
     coll = await session.get(Collection, collection_id)
     if coll is None:
         raise HTTPException(404, "Collection not found")
-    await _validate_source(session, body.poster_source)
+    await _validate_source(session, body.poster_source, collection_id=coll.id)
     coll.poster_source = body.poster_source
     if body.poster_source:
         await _close_poster_issue(session, collection_id=coll.id)
@@ -607,6 +675,26 @@ async def item_image(
         raise HTTPException(404, "No poster")
     server = await session.get(Server, si.server_id)
     return await _thumb(request, server, si.remote_id, si.poster_ref, w)
+
+
+@router.get("/images/artwork/{artwork_id}")
+async def artwork_image(
+    artwork_id: int,
+    request: Request,
+    w: int = Query(300, ge=50, le=1000),
+    session: AsyncSession = Depends(get_session),
+):
+    art = await session.get(Artwork, artwork_id)
+    if art is None:
+        raise HTTPException(404, "No such artwork")
+    source = request.app.state.config.config_dir / art.file_path
+    try:
+        path = await request.app.state.thumbs.get_local(f"artwork:{art.id}", source, w)
+    except OSError as exc:
+        raise HTTPException(404, f"Artwork file missing or unreadable: {exc}") from exc
+    return FileResponse(
+        path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=604800"}
+    )
 
 
 @router.get("/images/collection/{server_collection_id}")
