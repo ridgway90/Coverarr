@@ -13,16 +13,16 @@ Plex, Jellyfin and Emby, doing only the work that a change actually requires.
 
 ## Phase 2: Posters
 
-- Clean base poster store in `/config/assets` (Coverarr keeps its own originals, so overlays
-  never stack)
-- Import **Kometa's original posters** folder (`config/overlays/<Library> Original Posters`)
+- [x] Clean base poster store in `/config/assets` (Coverarr keeps its own originals, so
+  overlays never stack)
+- [x] Import **Kometa's original posters** folder (`config/overlays/<Library> Original Posters`)
   as the base for Plex items that have Kometa overlays
-- Poster picker from TMDb (and the existing server art); **upload your own**, which pins
+- [ ] Poster picker from TMDb (and the existing server art); **upload your own**, which pins
   that item and overrides automatic choices everywhere
-- **Pending changes**: edits are staged server-side and survive closing the browser;
-  a "Push changes" button sends them (all, or one at a time)
-- Fingerprint-based sync: render and upload only when the base image or its inputs change;
-  record what was pushed to each server
+- [x] **Pending changes**: choices are kept server-side; the *Changes* page lists every
+  server that doesn't show the chosen poster yet and pushes them all, or one at a time
+- [x] Fingerprint-based sync: a server counts as done when its poster's fingerprint matches
+  the base (and Kometa's overlays aren't on it); Coverarr records the poster ref it pushed
 
 ## Phase 3: Overlays
 

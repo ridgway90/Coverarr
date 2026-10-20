@@ -10,12 +10,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from coverarr import __version__
-from coverarr.api import auth, jobs, kometa, library, review, servers, settings
+from coverarr.api import auth, changes, jobs, kometa, library, review, servers, settings
 from coverarr.config import Settings, get_settings
 from coverarr.db import dispose_engine, init_engine, run_migrations, session_factory
 from coverarr.security import current_user
 from coverarr.services.actions import run_collection_rename, run_collection_sync, run_fix_match
 from coverarr.services.assets import relocate_artwork
+from coverarr.services.changes import run_push_posters
 from coverarr.services.client_pool import ClientPool
 from coverarr.services.definitions import run_check_definitions
 from coverarr.services.importer import run_import, run_rematch
@@ -57,6 +58,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
         runner.register("refresh_collection", run_refresh_collection)
         runner.register("collection_remove", run_collection_remove)
         runner.register("check_definitions", run_check_definitions)
+        runner.register("push_posters", run_push_posters)
         await runner.start()
         app.state.jobs = runner
         app.state.client_pool = ClientPool()
@@ -72,7 +74,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
     app.state.config = config
     app.include_router(auth.router)
     protected = [Depends(current_user)]
-    for module in (servers, settings, library, review, jobs, kometa):
+    for module in (servers, settings, library, review, jobs, kometa, changes):
         app.include_router(module.router, dependencies=protected)
 
     @app.get("/api/health")

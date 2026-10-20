@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import PosterChooser from "../components/PosterChooser";
 import RenameCollection from "../components/RenameCollection";
+import PendingPush from "../components/PendingPush";
 import { Button, Card, ErrorNote, PageHeader, PresenceChips, ServerChip, Spinner } from "../components/ui";
 import { api, type CollectionDetail } from "../lib/api";
 import { useJobAction, useLibraries, useServerMap } from "../lib/hooks";
@@ -108,6 +109,8 @@ export default function CollectionDetailPage() {
           {((reload.job.result?.changes as string[] | undefined) ?? []).join(" · ") || "Refreshed."}
         </div>
       )}
+
+      <PendingPush collectionId={coll.id} />
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Card className="p-5">

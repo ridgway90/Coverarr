@@ -12,6 +12,7 @@ Plex has different artwork for Arrival, and Emby is missing a film and an episod
 
 from __future__ import annotations
 
+import base64
 import io
 import itertools
 import uuid
@@ -106,6 +107,7 @@ class Item:
     overlay: bool = False
     alt_art: bool = False
     file: str | None = None  # media file (movie/episode) or folder (show)
+    uploaded: bytes | None = None  # a poster uploaded through the API
 
     def rematch(self, title: str, year: int | None, ids: dict[str, str]) -> None:
         """What a server does on "Fix match": new identity and artwork, same file."""
@@ -122,6 +124,7 @@ class Coll:
     members: list[str]
     smart: bool = False
     art_version: int = 1
+    uploaded: bytes | None = None
 
 
 class FakeServer:
@@ -159,7 +162,25 @@ class FakeServer:
         self.collections[coll.id] = coll
         return coll
 
+    def upload(self, item_id: str, data: bytes) -> None:
+        target = self.collections.get(item_id) or self.items.get(item_id)
+        if target is None:
+            raise HTTPException(404)
+        Image.open(io.BytesIO(data)).verify()  # reject anything that isn't an image
+        target.uploaded = data
+        target.art_version += 1
+        if isinstance(target, Item):
+            target.overlay = False
+
     def image(self, item_id: str, width: int | None) -> bytes:
+        target = self.collections.get(item_id) or self.items.get(item_id)
+        if target is not None and target.uploaded:
+            img = Image.open(io.BytesIO(target.uploaded)).convert("RGB")
+            if width:
+                img = img.resize((width, int(width * img.height / img.width)))
+            buf = io.BytesIO()
+            img.save(buf, "PNG")
+            return buf.getvalue()
         if item_id in self.collections:
             return poster_png(f"coll:{self.collections[item_id].name}", width=width or 400)
         item = self.items.get(item_id)
@@ -336,6 +357,7 @@ def plex_router(srv: FakeServer) -> APIRouter:
             "ratingKey": item.id,
             "title": item.title,
             "type": item.kind,
+            "librarySectionID": item.library,
             "thumb": f"/library/metadata/{item.id}/thumb/{1700000000 + item.art_version}",
         }
         if item.year:
@@ -490,10 +512,23 @@ def plex_router(srv: FakeServer) -> APIRouter:
         apply_catalog(item, key)
         return {}
 
+    @r.post("/library/metadata/{rk}/posters")
+    async def upload_poster(rk: str, request: Request):
+        auth(request)
+        srv.upload(rk, await request.body())
+        return {}
+
     @r.put("/library/sections/{lib}/all")
     async def edit(lib: str, request: Request):
         auth(request)
         qp = request.query_params
+        if "label[].tag.tag-" in qp:
+            item = srv.items.get(qp["id"]) or _missing()
+            kinds = {"1": "movie", "2": "show", "3": "season", "4": "episode"}
+            if kinds.get(qp.get("type", "")) != item.kind or item.library != lib:
+                raise HTTPException(400)
+            item.labels = [t for t in item.labels if t != qp["label[].tag.tag-"]]
+            return {}
         coll = srv.collections.get(qp["id"]) or _missing()
         if qp.get("type") != "18" or coll.library != lib:
             raise HTTPException(400)
@@ -642,6 +677,12 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
             ]
         start, limit = int(qp.get("StartIndex", 0)), int(qp.get("Limit", 100))
         return {"Items": rows[start : start + limit], "TotalRecordCount": len(rows)}
+
+    @r.post("/Items/{item_id}/Images/Primary")
+    async def upload_image(item_id: str, request: Request):
+        auth(request)
+        srv.upload(item_id, base64.b64decode(await request.body(), validate=True))
+        return Response(status_code=204)
 
     @r.get("/Items/{item_id}/Images/Primary")
     async def image(item_id: str, request: Request):

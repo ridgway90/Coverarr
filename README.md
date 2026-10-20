@@ -4,10 +4,10 @@ One place to manage posters, overlays and collections for **Plex, Jellyfin and E
 all three look the same. It's a Kometa alternative built around doing as little work as
 possible: it tracks what each server already has and only touches what actually changed.
 
-> **Status: Phase 1 (foundation).** Coverarr connects to your servers, imports and matches
-> everything, shows where the servers disagree, and can create missing collections and fill
-> in missing members. Poster pushing, overlays and *arr webhooks come next; see
-> [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: Phase 2 (posters).** Coverarr connects to your servers, imports and matches
+> everything, shows where the servers disagree, creates missing collections and fills in
+> missing members, and pushes the base posters you choose to every server. Overlays and *arr
+> webhooks come next; see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## What Phase 1 does
 
@@ -29,13 +29,20 @@ possible: it tracks what each server already has and only touches what actually 
   - posters that differ → **pick which server has the clean base poster**
   - titles missing on a server
   Anything can be ignored; ignored items stay ignored across imports.
+- **Changes and Push.** Choosing a base poster (a server's poster or a Kometa original) only
+  records the choice. The *Changes* page lists every title, season, episode and collection
+  whose chosen poster isn't on every server yet, and why (different poster, still has
+  Kometa's overlays, no poster). **Push all**, or push one, uploads the base to just those
+  servers. On Plex the Kometa `Overlay` label is removed, since the new poster doesn't carry
+  Kometa's overlays. A server that already shows the same artwork is skipped.
 - **Poster fingerprints.** Each poster gets a perceptual hash of its middle band, so Kometa's
   top/bottom gradients and corner badges don't count as a difference, but different artwork
   does. Plex items Kometa has overlaid (its `Overlay` label) are flagged.
 - **Incremental by design.** Each server's poster reference changes whenever the artwork
   changes, so re-scans only download posters that changed, and thumbnails are cached on disk.
-  A full import of ~3,800 movies, 700 shows, 28,000 episodes and 480 collections across three
-  servers takes well under a minute.
+  Every import is followed by a fingerprint scan of just the new or changed posters. A full
+  import of ~3,800 movies, 700 shows, 28,000 episodes and 480 collections across three
+  servers takes well under a minute (the first fingerprint scan takes a minute or two more).
 - **Import from Kometa** (Settings → Import from Kometa):
   - *Original posters*: upload a zip of Kometa's `config/overlays/<Library> Original Posters`
     folders, or import them from a folder Coverarr can see (e.g. copy them into the config

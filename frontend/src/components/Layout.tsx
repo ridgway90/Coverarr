@@ -4,6 +4,7 @@ import {
   FolderKanban,
   LayoutDashboard,
   ListChecks,
+  Upload,
   Loader2,
   LogOut,
   Menu,
@@ -15,7 +16,7 @@ import {
 import { useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { api } from "../lib/api";
-import { jobLabel, useActiveJobs, useLibraries } from "../lib/hooks";
+import { jobLabel, useActiveJobs, useChangesSummary, useLibraries } from "../lib/hooks";
 import { CountBadge, cx } from "./ui";
 
 function NavItem({ to, icon, label, badge }: { to: string; icon: React.ReactNode; label: string; badge?: number }) {
@@ -43,6 +44,8 @@ export default function Layout({ username }: { username: string }) {
   const location = useLocation();
   const { data: libs } = useLibraries();
   const { active, dashboard } = useActiveJobs();
+  const { data: changes } = useChangesSummary();
+  const pending = (changes?.titles ?? 0) + (changes?.collections ?? 0) + (changes?.problems ?? 0);
   const openIssues = Object.values(dashboard?.issues ?? {}).reduce((a, b) => a + (b ?? 0), 0);
   const running = active.find((j) => j.status === "running") ?? active[0];
 
@@ -71,6 +74,7 @@ export default function Layout({ username }: { username: string }) {
       <NavItem to="/collections" icon={<FolderKanban className="size-4" />} label="Collections" />
       <div className="mt-3 px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted/70">Manage</div>
       <NavItem to="/review" icon={<ListChecks className="size-4" />} label="Review" badge={openIssues} />
+      <NavItem to="/changes" icon={<Upload className="size-4" />} label="Changes" badge={pending} />
       <NavItem to="/jobs" icon={<Workflow className="size-4" />} label="Activity" />
       <NavItem to="/settings" icon={<Settings className="size-4" />} label="Settings" />
       <div className="mt-auto space-y-2">

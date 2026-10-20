@@ -19,6 +19,7 @@ import { useState } from "react";
 export const ISSUE_SHORT: Record<string, string> = {
   poster_differs: "Posters differ",
   item_missing: "Missing on a server",
+  push_pending: "Not pushed yet",
 };
 
 export default function LibraryPage() {
@@ -42,7 +43,7 @@ export default function LibraryPage() {
   };
 
   const missingOn = filter.startsWith("missing:") ? Number(filter.split(":")[1]) : undefined;
-  const issues = filter === "poster" || filter === "missing" || filter === "any" ? filter : undefined;
+  const issues = ["poster", "push", "missing", "any"].includes(filter) ? filter : undefined;
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ["items", libraryId, q, filter, page],
     queryFn: () =>
@@ -75,6 +76,7 @@ export default function LibraryPage() {
           <option value="">All titles</option>
           <option value="any">Has differences</option>
           <option value="poster">Posters differ</option>
+          <option value="push">Chosen poster not pushed yet</option>
           <option value="missing">Missing on a server</option>
           {expected.map((id) => (
             <option key={id} value={`missing:${id}`}>
@@ -84,6 +86,13 @@ export default function LibraryPage() {
         </select>
       </div>
 
+      {!!data?.unscanned && ["any", "poster", "push"].includes(filter) && (
+        <p className="mb-4 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-sm">
+          {data.unscanned.toLocaleString()} poster{data.unscanned === 1 ? " hasn't" : "s haven't"} been fingerprinted
+          yet, so {data.unscanned === 1 ? "it isn't" : "they aren't"} compared. Run <strong>Scan posters</strong> from
+          the dashboard (imports now do this automatically).
+        </p>
+      )}
       {isLoading ? (
         <Spinner />
       ) : !data?.items.length ? (

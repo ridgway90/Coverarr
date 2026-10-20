@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { api, type Dashboard, type Job, type Library, type Server } from "./api";
+import { api, type ChangesSummary, type Dashboard, type Job, type Library, type Server } from "./api";
 
 export function useServers() {
   return useQuery({ queryKey: ["servers"], queryFn: () => api.get<Server[]>("/api/servers") });
@@ -33,7 +33,7 @@ export function useActiveJobs() {
     const finished = previous.current.filter((id) => !ids.includes(id));
     previous.current = ids;
     if (finished.length) {
-      for (const key of ["items", "item", "collections", "collection", "review", "issues", "libraries", "jobs", "servers"]) {
+      for (const key of ["items", "item", "collections", "collection", "review", "issues", "libraries", "jobs", "servers", "changes"]) {
         qc.invalidateQueries({ queryKey: [key] });
       }
     }
@@ -53,6 +53,7 @@ export const JOB_LABELS: Record<string, string> = {
   refresh_collection: "Refresh collection",
   collection_remove: "Remove from collection",
   check_definitions: "Check collection lists",
+  push_posters: "Push posters",
 };
 
 export function jobLabel(job: Pick<Job, "kind">): string {
@@ -81,7 +82,7 @@ export function useJobAction<T>(start: (arg: T) => Promise<{ job_id: number }>, 
   useEffect(() => {
     if (!finished || jobId === null || handled.current === jobId) return;
     handled.current = jobId;
-    for (const key of [...keys.current, "dashboard", "issues", "review"]) qc.invalidateQueries({ queryKey: [key] });
+    for (const key of [...keys.current, "dashboard", "issues", "review", "changes"]) qc.invalidateQueries({ queryKey: [key] });
   }, [finished, jobId, qc]);
   return {
     run: mutation.mutate,
@@ -89,4 +90,14 @@ export function useJobAction<T>(start: (arg: T) => Promise<{ job_id: number }>, 
     job: job.data,
     error: mutation.error,
   };
+}
+
+/** Pending poster pushes, for the sidebar badge. */
+export function useChangesSummary() {
+  return useQuery({
+    queryKey: ["changes", "summary"],
+    queryFn: () => api.get<ChangesSummary>("/api/changes/summary"),
+    // Jobs and poster choices invalidate it; this only catches changes made elsewhere.
+    refetchInterval: 300000,
+  });
 }
