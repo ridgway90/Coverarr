@@ -46,6 +46,8 @@ export const JOB_LABELS: Record<string, string> = {
   poster_scan: "Poster fingerprint scan",
   rematch: "Re-match libraries",
   collection_sync: "Update collections",
+  fix_match: "Fix match",
+  collection_rename: "Rename collection",
 };
 
 export function jobLabel(job: Pick<Job, "kind">): string {

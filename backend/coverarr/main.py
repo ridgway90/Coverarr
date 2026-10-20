@@ -14,7 +14,7 @@ from coverarr.api import auth, jobs, library, review, servers, settings
 from coverarr.config import Settings, get_settings
 from coverarr.db import dispose_engine, init_engine, run_migrations, session_factory
 from coverarr.security import current_user
-from coverarr.services.actions import run_collection_sync, run_fix_match
+from coverarr.services.actions import run_collection_rename, run_collection_sync, run_fix_match
 from coverarr.services.client_pool import ClientPool
 from coverarr.services.importer import run_import, run_rematch
 from coverarr.services.jobs import JobRunner
@@ -42,6 +42,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
         runner.register("poster_scan", run_poster_scan)
         runner.register("collection_sync", run_collection_sync)
         runner.register("fix_match", run_fix_match)
+        runner.register("collection_rename", run_collection_rename)
         await runner.start()
         app.state.jobs = runner
         app.state.client_pool = ClientPool()

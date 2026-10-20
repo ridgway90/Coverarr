@@ -3,6 +3,7 @@
 Issue types:
 
 * ``mismatch``                the same file is matched to different titles on different servers
+* ``similar_collections``     separate collections whose names look the same
 * ``item_missing``            a movie/show is absent (or unmatched) on some servers
 * ``poster_differs``          the same movie/show has visibly different posters per server
 * ``collection_missing``      a collection exists on some servers but not others
@@ -32,6 +33,7 @@ from coverarr.services.settings_store import get_setting
 
 ISSUE_TYPES = (
     "mismatch",
+    "similar_collections",
     "item_missing",
     "poster_differs",
     "collection_missing",
@@ -177,6 +179,7 @@ async def compute_issues(session: AsyncSession) -> dict[str, dict[str, Any]]:
     ):
         by_collection[sc.collection_id].append(sc)
 
+    member_counts: dict[int, int] = {}
     for cid, scs in by_collection.items():
         coll = collections[cid]
         members = {
@@ -188,6 +191,7 @@ async def compute_issues(session: AsyncSession) -> dict[str, dict[str, Any]]:
             for sc in scs
         }
         union = set().union(*members.values())
+        member_counts[cid] = len(union)
         present = set(members)
         missing = lib_servers.get(coll.library_id, set()) - present
         if missing:
@@ -248,6 +252,32 @@ async def compute_issues(session: AsyncSession) -> dict[str, dict[str, Any]]:
                         "collection_id": cid,
                         "details": {"target": "collection", **diff},
                     }
+    # Different collections whose names look the same ("Jay and Silent Bob Collection" vs
+    # "Jay & Silent Bob") are easy to confuse; suggest giving one a clearer name.
+    similar: dict[tuple[int | None, str], list[int]] = defaultdict(list)
+    for cid in sorted(by_collection):
+        coll = collections[cid]
+        similar[(coll.library_id, coll.normalized_name)].append(cid)
+    for (library_id, _), ids in similar.items():
+        if len(ids) < 2:
+            continue
+        issues["similar_collections:" + ",".join(map(str, ids))] = {
+            "type": "similar_collections",
+            "title": " / ".join(collections[c].name for c in ids),
+            "library_id": library_id,
+            "collection_id": ids[0],
+            "details": {
+                "collections": [
+                    {
+                        "id": c,
+                        "name": collections[c].name,
+                        "servers": sorted(sc.server_id for sc in by_collection[c]),
+                        "member_count": member_counts.get(c, 0),
+                    }
+                    for c in ids
+                ]
+            },
+        }
     return issues
 
 

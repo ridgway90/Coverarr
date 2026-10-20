@@ -335,3 +335,33 @@ async def test_same_name_collections_stay_separate(app, authed, fake_servers):
         await session.commit()
     await run_job(app, client, "rematch")
     await check()
+
+    # They're flagged as easy to confuse; renaming one everywhere clears that.
+    [similar] = await issues(client, "similar_collections")
+    names = {c["name"]: c for c in similar["details"]["collections"]}
+    assert set(names) == {"Paddington", "Paddington Collection"}
+    universe = names["Paddington"]
+    resp = await client.post(
+        f"/api/collections/{universe['id']}/rename", json={"name": "Paddington Universe"}
+    )
+    assert resp.status_code == 200, resp.text
+    await app.state.jobs.wait_idle()
+    job = (await client.get(f"/api/jobs/{resp.json()['job_id']}")).json()
+    assert job["status"] == "succeeded" and job["result"]["renamed"] == 1, job
+    assert "Paddington Universe" in [c.name for c in plex.collections.values()]
+    assert await issues(client, "similar_collections") == []
+    detail = (await client.get(f"/api/collections/{universe['id']}")).json()
+    assert detail["name"] == "Paddington Universe"
+
+    # Renaming a collection that's on Jellyfin too renames it there as well.
+    coll_id = names["Paddington Collection"]["id"]
+    resp = await client.post(
+        f"/api/collections/{coll_id}/rename", json={"name": "Paddington Films"}
+    )
+    await app.state.jobs.wait_idle()
+    jf = fake_servers["jellyfin"]
+    assert "Paddington Films" in [c.name for c in jf.collections.values()]
+    await run_job(app, client, "import")
+    detail = (await client.get(f"/api/collections/{coll_id}")).json()
+    assert detail["name"] == "Paddington Films"
+    assert len(detail["servers"]) == 3

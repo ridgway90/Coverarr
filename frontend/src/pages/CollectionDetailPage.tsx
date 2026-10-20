@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, Circle, FolderPlus, Minus, UserPlus } from "lucide-react";
+import { ArrowLeft, Check, Circle, FolderPlus, Minus, Pencil, UserPlus } from "lucide-react";
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import PosterChooser from "../components/PosterChooser";
+import RenameCollection from "../components/RenameCollection";
 import { Button, Card, ErrorNote, PageHeader, PresenceChips, ServerChip, Spinner } from "../components/ui";
 import { api, type CollectionDetail } from "../lib/api";
 import { useLibraries, useServerMap } from "../lib/hooks";
@@ -12,6 +14,7 @@ export default function CollectionDetailPage() {
   const qc = useQueryClient();
   const servers = useServerMap();
   const { data: libs } = useLibraries();
+  const [renaming, setRenaming] = useState(false);
   const { data: coll, isLoading, error } = useQuery({
     queryKey: ["collection", collectionId],
     queryFn: () => api.get<CollectionDetail>(`/api/collections/${collectionId}`),
@@ -47,6 +50,9 @@ export default function CollectionDetailPage() {
         subtitle={<PresenceChips servers={servers} presentIds={present} expectedIds={expected} />}
         actions={
           <>
+            <Button variant="ghost" icon={<Pencil className="size-4" />} onClick={() => setRenaming(true)}>
+              Rename
+            </Button>
             {missingServers.length > 0 && (
               <Button
                 variant="primary"
@@ -65,6 +71,7 @@ export default function CollectionDetailPage() {
           </>
         }
       />
+      {renaming && <RenameCollection collectionId={coll.id} currentName={coll.name} onClose={() => setRenaming(false)} />}
       {sync.isSuccess && (
         <div className="mb-4 rounded-md border border-accent/30 bg-accent/10 px-3 py-2 text-sm">
           Queued. Watch progress in the sidebar; this page refreshes when it's done.

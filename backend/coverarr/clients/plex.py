@@ -295,3 +295,15 @@ class PlexClient(MediaServerClient):
                 f"/library/collections/{collection_id}/items",
                 params={"uri": await self._metadata_uri(member_ids)},
             )
+
+    async def rename_collection(
+        self, library_remote_id: str | None, collection_id: str, name: str
+    ) -> None:
+        if not library_remote_id:
+            raise MediaServerError("plex: collection has no library section")
+        # type 18 = collection; locking stops agents or tools from renaming it back.
+        await self._request(
+            "PUT",
+            f"/library/sections/{library_remote_id}/all",
+            params={"type": 18, "id": collection_id, "title.value": name, "title.locked": 1},
+        )

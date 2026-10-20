@@ -231,6 +231,17 @@ class JellyfinClient(MediaServerClient):
                 "POST", f"/Collections/{collection_id}/Items", params={"Ids": ",".join(member_ids)}
             )
 
+    async def rename_collection(
+        self, library_remote_id: str | None, collection_id: str, name: str
+    ) -> None:
+        # Item updates take the whole item back, so fetch it, change the name and lock it.
+        uid = await self.user_id()
+        item = await self._json("GET", f"/Users/{uid}/Items/{collection_id}")
+        item["Name"] = name
+        locked = set(item.get("LockedFields") or [])
+        item["LockedFields"] = sorted(locked | {"Name"})
+        await self._request("POST", f"/Items/{collection_id}", json=item)
+
 
 class EmbyClient(JellyfinClient):
     kind = "emby"

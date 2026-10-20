@@ -135,7 +135,10 @@ export interface Issue {
   updated_at: string;
 }
 
-export type IssueType = "mismatch" | "item_missing" | "poster_differs" | "collection_missing" | "collection_members_differ";
+export type IssueType =
+  | "mismatch"
+  | "similar_collections"
+  | "item_missing" | "poster_differs" | "collection_missing" | "collection_members_differ";
 
 export interface Season {
   id: number;

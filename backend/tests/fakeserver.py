@@ -455,6 +455,16 @@ def plex_router(srv: FakeServer) -> APIRouter:
         apply_catalog(item, key)
         return {}
 
+    @r.put("/library/sections/{lib}/all")
+    async def edit(lib: str, request: Request):
+        auth(request)
+        qp = request.query_params
+        coll = srv.collections.get(qp["id"]) or _missing()
+        if qp.get("type") != "18" or coll.library != lib:
+            raise HTTPException(400)
+        coll.name = qp["title.value"]
+        return {}
+
     @r.get("/library/metadata/{rk}/thumb/{ts}")
     async def thumb(rk: str, ts: str, request: Request):
         auth(request)
@@ -600,8 +610,20 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
     @r.get("/Users/{uid}/Items/{item_id}")
     async def item(uid: str, item_id: str, request: Request):
         auth(request)
+        if item_id in srv.collections:
+            return coll_row(srv.collections[item_id])
         found = srv.items.get(item_id) or _missing()
         return row(found)
+
+    @r.post("/Items/{item_id}")
+    async def update_item(item_id: str, request: Request):
+        auth(request)
+        body = await request.json()
+        coll = srv.collections.get(item_id) or _missing()
+        if body.get("Id") != item_id:
+            raise HTTPException(400)  # the real API wants the whole item back
+        coll.name = body["Name"]
+        return Response(status_code=204)
 
     @r.post("/Items/RemoteSearch/{search_type}")
     async def remote_search(search_type: str, request: Request):
