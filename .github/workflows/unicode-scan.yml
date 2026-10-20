@@ -1,0 +1,34 @@
+name: Unicode Scan
+
+# Blocks bidirectional controls (Trojan Source, CVE-2021-42574), invisible
+# characters, and homoglyph letters - things a diff review cannot see, because
+# the whole point of them is that the rendered line differs from the parsed one.
+#
+# Deliberately NOT path-filtered: a check that can be sidestepped by choosing
+# which file to poison is not a check. This runs on every pull request and
+# costs a couple of seconds: no dependencies, no network, stdlib only.
+# Same scanner as PEMForge (scripts/scan-unicode.py).
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Suspicious characters
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Runs first: if the detectors themselves stopped firing, a clean scan
+      # below would be meaningless rather than reassuring.
+      - name: Verify the detectors still fire
+        run: python3 scripts/scan-unicode.py --self-test
+
+      - name: Scan repository
+        run: python3 scripts/scan-unicode.py --verbose
