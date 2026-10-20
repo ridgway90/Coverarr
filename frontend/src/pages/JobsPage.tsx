@@ -12,11 +12,15 @@ function StatusIcon({ status }: { status: Job["status"] }) {
   return <Clock className="size-4 text-muted" />;
 }
 
+/** Time spent so far ("Running for …") or in total ("Took …"). */
 function duration(job: Job): string {
-  if (!job.started_at) return "";
+  if (!job.started_at) return job.status === "queued" ? "Waiting" : "";
   const end = job.finished_at ? new Date(job.finished_at) : new Date();
   const secs = Math.max(0, Math.round((end.getTime() - new Date(job.started_at).getTime()) / 1000));
-  return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const text = h ? `${h}h ${m}m` : m ? `${m}m ${secs % 60}s` : `${secs}s`;
+  return job.finished_at ? `Took ${text}` : `Running for ${text}`;
 }
 
 export default function JobsPage() {
