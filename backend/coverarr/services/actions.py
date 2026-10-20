@@ -20,7 +20,7 @@ from coverarr.clients.base import RemoteItem
 from coverarr.models import Collection, Issue, Server, ServerCollection, ServerItem, ServerLibrary
 from coverarr.services.importer import apply_remote_item
 from coverarr.services.jobs import JobContext
-from coverarr.services.matching import match_all
+from coverarr.services.matching import match_all, normalize_collection_name
 from coverarr.services.review import refresh_issues
 
 
@@ -234,3 +234,42 @@ async def run_fix_match(ctx: JobContext) -> dict[str, Any]:
     if to_fix and failed == len(to_fix):
         raise RuntimeError("No server accepted the new match; see the log")
     return {"fixed": fixed, "pending": pending, "failed": failed, "issues": issues}
+
+
+async def run_collection_rename(ctx: JobContext) -> dict[str, Any]:
+    """Rename a collection on every server it exists on."""
+    name: str = ctx.params["name"]
+    async with ctx.sessionmaker() as session:
+        coll = await session.get(Collection, ctx.params["collection_id"])
+        if coll is None:
+            raise ValueError("That collection no longer exists")
+        rows = (
+            await session.execute(
+                select(ServerCollection, Server, ServerLibrary.remote_id)
+                .join(Server, Server.id == ServerCollection.server_id)
+                .outerjoin(ServerLibrary, ServerLibrary.id == ServerCollection.server_library_id)
+                .where(ServerCollection.collection_id == coll.id)
+            )
+        ).all()
+        renamed = failed = 0
+        for sc, server, library_remote_id in rows:
+            try:
+                async with client_for(server) as client:
+                    await client.rename_collection(library_remote_id, sc.remote_id, name)
+            except MediaServerError as exc:
+                failed += 1
+                await ctx.log(f"{server.name}: could not rename '{sc.name}': {exc}")
+                continue
+            await ctx.log(f"{server.name}: renamed '{sc.name}' to '{name}'")
+            sc.name = name
+            renamed += 1
+        if renamed:
+            coll.name, coll.normalized_name = name, normalize_collection_name(name)
+        await session.commit()
+    async with ctx.sessionmaker() as session:
+        issues = await refresh_issues(session)
+        await session.commit()
+    await ctx.progress(1.0, "Renamed")
+    if rows and failed == len(rows):
+        raise RuntimeError("No server accepted the new name; see the log")
+    return {"renamed": renamed, "failed": failed, "issues": issues}

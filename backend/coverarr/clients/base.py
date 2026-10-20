@@ -197,3 +197,9 @@ class MediaServerClient(ABC):
     async def add_to_collection(
         self, library: RemoteLibrary, collection_id: str, member_ids: list[str]
     ) -> None: ...
+
+    @abstractmethod
+    async def rename_collection(
+        self, library_remote_id: str | None, collection_id: str, name: str
+    ) -> None:
+        """Rename a collection (and lock the title so the server doesn't revert it)."""

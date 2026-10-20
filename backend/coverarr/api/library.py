@@ -558,6 +558,28 @@ async def sync_collection(
     return {"job_id": job.id}
 
 
+class CollectionRename(BaseModel):
+    name: str = Field(min_length=1, max_length=300)
+
+
+@router.post("/collections/{collection_id}/rename")
+async def rename_collection(
+    collection_id: int,
+    body: CollectionRename,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    if await session.get(Collection, collection_id) is None:
+        raise HTTPException(404, "Collection not found")
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "Name can't be blank")
+    job = await request.app.state.jobs.enqueue(
+        "collection_rename", {"collection_id": collection_id, "name": name}
+    )
+    return {"job_id": job.id}
+
+
 # --- images -----------------------------------------------------------------------------------
 
 

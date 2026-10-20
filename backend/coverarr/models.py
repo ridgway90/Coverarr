@@ -208,7 +208,8 @@ class Collection(Base):
     """A logical collection matched by name across servers."""
 
     __tablename__ = "collections"
-    __table_args__ = (UniqueConstraint("library_id", "normalized_name"),)
+    # Not unique: one server can have two collections whose names normalise the same.
+    __table_args__ = (Index("ix_collections_library_norm", "library_id", "normalized_name"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     library_id: Mapped[int | None] = mapped_column(ForeignKey("libraries.id", ondelete="CASCADE"))

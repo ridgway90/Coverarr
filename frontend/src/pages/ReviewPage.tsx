@@ -21,6 +21,7 @@ import {
 } from "../components/ui";
 import { api, qs, type Issue, type IssueType, type ReviewSummary, type Server } from "../lib/api";
 import MismatchRow from "../components/MismatchRow";
+import RenameCollection from "../components/RenameCollection";
 import { useLibraries, useServerMap } from "../lib/hooks";
 
 const TABS: { id: IssueType; label: string; help: string }[] = [
@@ -28,6 +29,11 @@ const TABS: { id: IssueType; label: string; help: string }[] = [
     id: "mismatch",
     label: "Mismatched",
     help: "The same file is matched to different titles on different servers, so one of them is wrong. Coverarr suggests the likely match with its reasons, but nothing changes until you confirm.",
+  },
+  {
+    id: "similar_collections",
+    label: "Similar collections",
+    help: "Separate collections whose names look the same, such as a film series and its wider \"universe\". Give one a clearer name so they're easy to tell apart, or ignore it if the names are fine.",
   },
   {
     id: "collection_missing",
@@ -58,6 +64,8 @@ export function describeIssue(issue: Issue, servers: Map<number, Server>): React
   switch (issue.type) {
     case "mismatch":
       return "Matched to different titles on different servers";
+    case "similar_collections":
+      return "Another collection has a very similar name";
     case "item_missing":
       return `Missing on ${names(d.missing, servers)}${d.no_ids ? " (no TMDb/TVDB/IMDb ids)" : ""}`;
     case "collection_missing":
@@ -290,6 +298,7 @@ function IssueRow({ issue, servers, onChoose }: { issue: Issue; servers: Map<num
   );
 
   if (issue.type === "mismatch") return <MismatchRow issue={issue} servers={servers} />;
+  if (issue.type === "similar_collections") return <SimilarRow issue={issue} servers={servers} />;
 
   if (issue.type === "poster_differs") {
     const entries = d.servers as { server_id: number; server_item_id?: number; server_collection_id?: number; has_poster: boolean; kometa_overlay: boolean }[];
@@ -369,6 +378,31 @@ function IssueRow({ issue, servers, onChoose }: { issue: Issue; servers: Map<num
         Missing on {names(d.missing, servers)}
         {d.no_ids && " · no TMDb/TVDB/IMDb ids on this title"}
       </span>
+    </div>
+  );
+}
+
+function SimilarRow({ issue, servers }: { issue: Issue; servers: Map<number, Server> }) {
+  const [renaming, setRenaming] = useState<{ id: number; name: string } | null>(null);
+  const colls = issue.details.collections as { id: number; name: string; servers: number[]; member_count: number }[];
+  return (
+    <div>
+      <div className="text-sm text-muted">These look like the same collection but are separate:</div>
+      <ul className="mt-2 space-y-2">
+        {colls.map((c) => (
+          <li key={c.id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <Link to={`/collections/${c.id}`} className="font-medium hover:text-accent">
+              {c.name}
+            </Link>
+            <PresenceChips servers={servers} presentIds={c.servers} expectedIds={c.servers} />
+            <span className="text-sm text-muted">{c.member_count} titles</span>
+            <Button size="sm" variant="ghost" onClick={() => setRenaming({ id: c.id, name: c.name })}>
+              Rename…
+            </Button>
+          </li>
+        ))}
+      </ul>
+      {renaming && <RenameCollection collectionId={renaming.id} currentName={renaming.name} onClose={() => setRenaming(null)} />}
     </div>
   );
 }

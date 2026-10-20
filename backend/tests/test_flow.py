@@ -289,3 +289,81 @@ async def test_gentle_profile_and_show_paths(app, authed, fake_servers):
         "/data/media/TV/Black Books (2000) {tvdb-72216}",
         "/data/media/TV/Spaced (1999) {tvdb-75592}",
     ]
+
+
+async def test_same_name_collections_stay_separate(app, authed, fake_servers):
+    """A franchise and its "universe" on one server ("Jay and Silent Bob Collection" vs
+    "Jay & Silent Bob") normalise to the same name but must stay separate collections."""
+    from sqlalchemy import select, update
+
+    from coverarr.db import session_factory
+    from coverarr.models import Collection, ServerCollection
+
+    client = authed
+    plex = fake_servers["plex"]
+    films = plex.libraries[0][0]
+    plex.add_collection("Paddington", films, ["Paddington", "Paddington 2", "Elf", "Home Alone"])
+    server_ids = await add_servers(client)
+    await run_job(app, client, "import")
+
+    async def check() -> None:
+        libs = (await client.get("/api/libraries")).json()["libraries"]
+        films_lib = next(lib for lib in libs if lib["name"] == "Films")
+        colls = (
+            await client.get("/api/collections", params={"library_id": films_lib["id"]})
+        ).json()
+        servers_of = {c["name"]: sorted(s["server_id"] for s in c["servers"]) for c in colls}
+        assert servers_of["Paddington"] == [server_ids["plex"]]
+        assert servers_of["Paddington Collection"] == sorted(server_ids.values())
+        missing = {
+            i["title"]: i["details"]["missing"] for i in await issues(client, "collection_missing")
+        }
+        assert missing["Paddington"] == sorted([server_ids["jellyfin"], server_ids["emby"]])
+        differ = [i["title"] for i in await issues(client, "collection_members_differ")]
+        assert not any(t.startswith("Paddington") for t in differ)
+
+    await check()
+
+    # Databases from before this fix have both Plex collections merged into one record.
+    async with session_factory()() as session:
+        target = await session.scalar(
+            select(Collection.id).where(Collection.name == "Paddington Collection")
+        )
+        await session.execute(
+            update(ServerCollection)
+            .where(ServerCollection.name.in_(("Paddington", "Paddington Collection")))
+            .values(collection_id=target)
+        )
+        await session.commit()
+    await run_job(app, client, "rematch")
+    await check()
+
+    # They're flagged as easy to confuse; renaming one everywhere clears that.
+    [similar] = await issues(client, "similar_collections")
+    names = {c["name"]: c for c in similar["details"]["collections"]}
+    assert set(names) == {"Paddington", "Paddington Collection"}
+    universe = names["Paddington"]
+    resp = await client.post(
+        f"/api/collections/{universe['id']}/rename", json={"name": "Paddington Universe"}
+    )
+    assert resp.status_code == 200, resp.text
+    await app.state.jobs.wait_idle()
+    job = (await client.get(f"/api/jobs/{resp.json()['job_id']}")).json()
+    assert job["status"] == "succeeded" and job["result"]["renamed"] == 1, job
+    assert "Paddington Universe" in [c.name for c in plex.collections.values()]
+    assert await issues(client, "similar_collections") == []
+    detail = (await client.get(f"/api/collections/{universe['id']}")).json()
+    assert detail["name"] == "Paddington Universe"
+
+    # Renaming a collection that's on Jellyfin too renames it there as well.
+    coll_id = names["Paddington Collection"]["id"]
+    resp = await client.post(
+        f"/api/collections/{coll_id}/rename", json={"name": "Paddington Films"}
+    )
+    await app.state.jobs.wait_idle()
+    jf = fake_servers["jellyfin"]
+    assert "Paddington Films" in [c.name for c in jf.collections.values()]
+    await run_job(app, client, "import")
+    detail = (await client.get(f"/api/collections/{coll_id}")).json()
+    assert detail["name"] == "Paddington Films"
+    assert len(detail["servers"]) == 3

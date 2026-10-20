@@ -16,6 +16,7 @@ router = APIRouter(prefix="/api/review", tags=["review"])
 
 IssueType = Literal[
     "mismatch",
+    "similar_collections",
     "item_missing",
     "poster_differs",
     "collection_missing",
