@@ -23,6 +23,7 @@ from coverarr.services.files import file_key, show_folder
 from coverarr.services.jobs import JobContext
 from coverarr.services.load import LoadProfile, load_profile
 from coverarr.services.matching import match_all, normalize_title
+from coverarr.services.mediainfo import refresh_facts
 from coverarr.services.review import refresh_issues
 
 log = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ ITEM_FIELDS = (
     "labels",
     "path",
     "file_key",
+    "media",
 )
 
 
@@ -115,6 +117,7 @@ def _item_values(item: RemoteItem) -> dict[str, Any]:
         "poster_ref": item.poster_ref,
         "labels": item.labels,
         "path": item.path,
+        "media": item.media,
         "file_key": file_key(item.path, item.kind) if item.kind in ("movie", "show") else None,
     }
 
@@ -343,6 +346,7 @@ async def run_import(ctx: JobContext) -> dict[str, Any]:
     await ctx.progress(0.87, "Matching items across servers")
     async with sm() as session:
         result["matching"] = await match_all(session)
+        await refresh_facts(session)
         await session.commit()
     await ctx.progress(0.95, "Checking for differences")
     async with sm() as session:
@@ -359,6 +363,7 @@ async def run_rematch(ctx: JobContext) -> dict[str, Any]:
     async with ctx.sessionmaker() as session:
         await ctx.progress(0.1, "Matching items across servers")
         matching = await match_all(session)
+        await refresh_facts(session)
         await ctx.progress(0.8, "Checking for differences")
         issues = await refresh_issues(session)
         await session.commit()

@@ -54,6 +54,8 @@ class RemoteItem:
     labels: list[str] = field(default_factory=list)
     # Media file (movies, episodes) or folder (shows) as the server sees it.
     path: str | None = None
+    # What overlays need, as far as this server knows: resolution, hdr, dv, edition, network.
+    media: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

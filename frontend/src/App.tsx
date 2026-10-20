@@ -11,6 +11,7 @@ import CollectionsPage from "./pages/CollectionsPage";
 import DashboardPage from "./pages/DashboardPage";
 import ItemDetailPage from "./pages/ItemDetailPage";
 import JobsPage from "./pages/JobsPage";
+import OverlaysPage from "./pages/OverlaysPage";
 import LibraryPage from "./pages/LibraryPage";
 import ReviewPage from "./pages/ReviewPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="collections/:collectionId" element={<CollectionDetailPage />} />
         <Route path="review" element={<ReviewPage />} />
         <Route path="changes" element={<ChangesPage />} />
+        <Route path="overlays" element={<OverlaysPage />} />
         <Route path="jobs" element={<JobsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

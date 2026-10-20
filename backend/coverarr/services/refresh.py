@@ -20,6 +20,7 @@ from coverarr.models import (
 from coverarr.services.importer import apply_remote_item, upsert_items
 from coverarr.services.jobs import JobContext
 from coverarr.services.matching import match_all
+from coverarr.services.mediainfo import refresh_facts
 from coverarr.services.posters import _hash_one
 from coverarr.services.review import refresh_issues
 
@@ -35,6 +36,7 @@ LABELS = {
 
 async def _finish(session: AsyncSession, library_id: int | None) -> dict[str, int]:
     await match_all(session, [library_id] if library_id is not None else [])
+    await refresh_facts(session, [library_id] if library_id is not None else [])
     issues = await refresh_issues(session)
     await session.commit()
     return issues

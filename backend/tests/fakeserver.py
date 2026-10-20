@@ -44,6 +44,15 @@ MOVIE_CATALOG["27"] = ("9 Songs", 2004, "tt0411705")
 SHOW_CATALOG = {"75592": ("Spaced", 1999), "72216": ("Black Books", 2000)}
 # Each server mounts the same media somewhere different.
 MOUNTS = {"plex": "/data/media", "jellyfin": "/media", "emby": "/mnt/media"}
+# Video facts per film (default 1080p SDR) and the quality Radarr wrote into the file name.
+VIDEO = {
+    "Arrival": {"resolution": "4k", "hdr": True, "dv": True},
+    "Paddington": {"resolution": "4k", "hdr": True},
+    "Elf": {"resolution": "1080", "edition": "Director's Cut"},
+    "Home Alone": {"resolution": "720"},
+}
+FILE_QUALITY = {"Arrival": "Bluray-2160p][DV HDR10", "Paddington": "Bluray-2160p][HDR10Plus"}
+NETWORKS = {"Spaced": "Channel 4", "Black Books": "Channel 4"}
 SHOWS = [
     # title, year, tvdb, seasons x episodes
     ("Spaced", 1999, "75592", 2, 7),
@@ -108,6 +117,8 @@ class Item:
     alt_art: bool = False
     file: str | None = None  # media file (movie/episode) or folder (show)
     uploaded: bytes | None = None  # a poster uploaded through the API
+    # Video facts: resolution ("4k", "1080"...), hdr, dv, edition; network for shows.
+    video: dict[str, Any] = field(default_factory=dict)
 
     def rematch(self, title: str, year: int | None, ids: dict[str, str]) -> None:
         """What a server does on "Fix match": new identity and artwork, same file."""
@@ -224,7 +235,8 @@ def populate(
                 art_seed=f"movie:{shown_title}",
                 overlay=overlays,
                 alt_art=title in alt_art,
-                file=f"{mount}/Movies/{name}/{name} [WEBDL-1080p].mkv",
+                file=f"{mount}/Movies/{name}/{name} [{FILE_QUALITY.get(title, 'WEBDL-1080p')}].mkv",
+                video=dict(VIDEO.get(title, {"resolution": "1080"})),
             )
         )
     for title, year, tvdb, seasons, episodes in SHOWS:
@@ -238,6 +250,7 @@ def populate(
                 {"tvdb": tvdb},
                 art_seed=f"show:{title}",
                 file=f"{mount}/TV/{title} ({year}) {{tvdb-{tvdb}}}",
+                video={"network": NETWORKS[title]},
             )
         )
         for s in range(1, seasons + 1):
@@ -267,6 +280,7 @@ def populate(
                         index=e,
                         parent_index=s,
                         art_seed=f"ep:{title}:{s}:{e}",
+                        video={"resolution": "4k" if (title, s) == ("Spaced", 2) else "720"},
                         file=f"{show.file}/Season {s:02d}/{title} - S{s:02d}E{e:02d}.mkv",
                     )
                 )
@@ -368,6 +382,12 @@ def plex_router(srv: FakeServer) -> APIRouter:
         if item.file and item.kind in ("movie", "episode"):
             # Shows deliberately get no Location: real listings often omit it.
             out["Media"] = [{"Part": [{"file": item.file}]}]
+        if item.kind in ("movie", "episode") and item.video.get("resolution"):
+            out.setdefault("Media", [{"Part": []}])[0]["videoResolution"] = item.video["resolution"]
+        if item.video.get("edition"):
+            out["editionTitle"] = item.video["edition"]
+        if item.video.get("network"):
+            out["studio"] = item.video["network"]
         if item.kind == "season":
             out.update(parentRatingKey=item.show, index=item.index)
         if item.kind == "episode":
@@ -420,6 +440,10 @@ def plex_router(srv: FakeServer) -> APIRouter:
         rows = [i for i in srv.items.values() if i.library == lib and i.kind == kind]
         if request.query_params.get("label") == "900":
             rows = [i for i in rows if "Overlay" in i.labels]
+        for param, flag in (("hdr", "hdr"), ("dovi", "dv")):
+            if param in request.query_params:
+                want = request.query_params[param] == "1"
+                rows = [i for i in rows if bool(i.video.get(flag)) == want]
         return page(request, [meta(i) for i in rows])
 
     @r.get("/library/sections/{lib}/collections")
@@ -607,6 +631,11 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
             out["Path"] = item.file
         if item.kind in ("movie", "show"):
             out["ProviderIds"] = {k.capitalize(): v for k, v in item.ids.items()}
+        sizes = {"4k": (3840, 1600), "1080": (1920, 800), "720": (1280, 720)}
+        if item.video.get("resolution") in sizes:
+            out["Width"], out["Height"] = sizes[item.video["resolution"]]
+        if item.video.get("network"):
+            out["Studios"] = [{"Name": item.video["network"]}]
         if item.kind == "season":
             out.update(SeriesId=item.show, IndexNumber=item.index)
         if item.kind == "episode":
