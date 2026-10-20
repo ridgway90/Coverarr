@@ -393,12 +393,11 @@ async def match_collections(session: AsyncSession, stats: MatchStats) -> None:
         )
     )
     collections = {c.id: c for c in await session.scalars(select(Collection))}
-    by_name: dict[tuple[int | None, str], Collection] = {
-        (c.library_id, c.normalized_name): c for c in collections.values()
-    }
-    # Logical members and servers seen per collection during this pass (for overlap matching).
+    # What each logical collection gathered during this pass: members, servers and the
+    # (casefolded) server-side names linked to it.
     coll_members: dict[int, set[int]] = defaultdict(set)
     coll_servers: dict[int, set[int]] = defaultdict(set)
+    coll_names: dict[int, set[str]] = defaultdict(set)
 
     def infer_library(sc: ServerCollection, members: list[tuple[int, int]]) -> int | None:
         if sc.server_library_id and sl_to_lib.get(sc.server_library_id):
@@ -406,25 +405,43 @@ async def match_collections(session: AsyncSession, stats: MatchStats) -> None:
         votes = Counter(lib for _, lib in members)
         return votes.most_common(1)[0][0] if votes else None
 
-    def overlap_match(lib_id: int, server_id: int, members: set[int]) -> Collection | None:
-        best, best_score = None, 0.0
-        for cid, mset in coll_members.items():
-            coll = collections[cid]
-            if coll.library_id != lib_id or server_id in coll_servers[cid] or not mset:
-                continue
-            inter = len(members & mset)
-            score = inter / len(members | mset)
-            if inter >= 2 and score >= COLLECTION_OVERLAP and score > best_score:
-                best, best_score = coll, score
-        return best
+    def score(coll: Collection, sc: ServerCollection, norm: str, members: set[int]) -> float:
+        """How well a server collection fits a logical one; 0 means it doesn't."""
+        names = coll_names[coll.id] or {coll.name.casefold()}
+        mset = coll_members[coll.id]
+        inter = len(members & mset)
+        overlap = inter / len(members | mset) if mset and members else 0.0
+        same_norm = coll.normalized_name == norm
+        if not same_norm and not (inter >= 2 and overlap >= COLLECTION_OVERLAP):
+            return 0.0
+        value = 0.5 * same_norm + overlap
+        if sc.name.casefold() in names:
+            value += 1.0
+        if coll.id == sc.collection_id:
+            value += 0.25  # prefer the existing link, keeping ids stable
+        return value
 
-    def by_name_any_library(norm: str) -> Collection | None:
-        found = [c for (lib, n), c in by_name.items() if n == norm]
-        return found[0] if len(found) == 1 else None
+    def best_match(sc: ServerCollection, lib_id: int | None, norm: str, members: set[int]):
+        candidates = [
+            c
+            for c in collections.values()
+            # A server never has two copies of one collection: if it already has one here,
+            # this must be a different collection (e.g. a franchise vs its "universe").
+            if sc.server_id not in coll_servers[c.id] and (c.library_id == lib_id or lib_id is None)
+        ]
+        scored = [(score(c, sc, norm, members), c) for c in candidates]
+        scored = [(v, c) for v, c in scored if v > 0]
+        if lib_id is None:
+            # Empty box sets: only an unambiguous name match.
+            scored = [(v, c) for v, c in scored if c.normalized_name == norm]
+            return scored[0][1] if len(scored) == 1 else None
+        return max(scored, key=lambda vc: vc[0])[1] if scored else None
 
     resolved: list[tuple[ServerCollection, Collection | None, int | None]] = []
     # Plex rows (library known) first so name-only fallbacks for empty box sets can find them.
-    ordered = sorted(server_colls, key=lambda sc: (sc.server_library_id is None, sc.server_id))
+    ordered = sorted(
+        server_colls, key=lambda sc: (sc.server_library_id is None, sc.server_id, sc.id)
+    )
     for sc in ordered:
         members = [
             m for rid in sc.member_remote_ids or [] if (m := member_map.get((sc.server_id, rid)))
@@ -432,14 +449,7 @@ async def match_collections(session: AsyncSession, stats: MatchStats) -> None:
         member_ids = {mi for mi, _ in members}
         lib_id = infer_library(sc, members)
         norm = normalize_collection_name(sc.name)
-        coll = None
-        current = collections.get(sc.collection_id) if sc.collection_id else None
-        if current and current.library_id == lib_id and current.normalized_name == norm:
-            coll = current
-        if coll is None and lib_id is not None:
-            coll = by_name.get((lib_id, norm)) or overlap_match(lib_id, sc.server_id, member_ids)
-        if coll is None and lib_id is None:
-            coll = by_name_any_library(norm)
+        coll = best_match(sc, lib_id, norm, member_ids)
         if coll is None and lib_id is not None:
             coll = Collection(
                 library_id=lib_id,
@@ -451,11 +461,14 @@ async def match_collections(session: AsyncSession, stats: MatchStats) -> None:
             session.add(coll)
             await session.flush()
             collections[coll.id] = coll
-            by_name[(lib_id, norm)] = coll
             stats.created += 1
         if coll is not None:
+            if not coll_servers[coll.id]:
+                # The first server's collection names the logical one.
+                coll.name, coll.normalized_name = sc.name, norm
             coll_members[coll.id] |= member_ids
             coll_servers[coll.id].add(sc.server_id)
+            coll_names[coll.id].add(sc.name.casefold())
         resolved.append((sc, coll, lib_id))
 
     for sc, coll, _ in resolved:
