@@ -19,6 +19,7 @@ def job_out(job: Job, runner=None, with_log: bool = False) -> dict:
         "status": job.status,
         "progress": live.fraction if live else job.progress,
         "message": live.message if live else job.message,
+        "state": live.state if live else {},
         "params": job.params,
         "result": job.result,
         "error": job.error.split("\n\n", 1)[0] if job.error else None,
