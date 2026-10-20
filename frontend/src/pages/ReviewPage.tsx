@@ -20,9 +20,15 @@ import {
   useDebounced,
 } from "../components/ui";
 import { api, qs, type Issue, type IssueType, type ReviewSummary, type Server } from "../lib/api";
+import MismatchRow from "../components/MismatchRow";
 import { useLibraries, useServerMap } from "../lib/hooks";
 
 const TABS: { id: IssueType; label: string; help: string }[] = [
+  {
+    id: "mismatch",
+    label: "Mismatched",
+    help: "The same file is matched to different titles on different servers, so one of them is wrong. Coverarr suggests the likely match with its reasons, but nothing changes until you confirm.",
+  },
   {
     id: "collection_missing",
     label: "Missing collections",
@@ -50,6 +56,8 @@ const names = (ids: number[], servers: Map<number, Server>) => ids.map((id) => s
 export function describeIssue(issue: Issue, servers: Map<number, Server>): ReactNode {
   const d = issue.details;
   switch (issue.type) {
+    case "mismatch":
+      return "Matched to different titles on different servers";
     case "item_missing":
       return `Missing on ${names(d.missing, servers)}${d.no_ids ? " (no TMDb/TVDB/IMDb ids)" : ""}`;
     case "collection_missing":
@@ -66,7 +74,10 @@ export function describeIssue(issue: Issue, servers: Map<number, Server>): React
 export default function ReviewPage() {
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
-  const type = (params.get("type") as IssueType) || "collection_missing";
+  const summary = useQuery({ queryKey: ["review", "summary"], queryFn: () => api.get<ReviewSummary>("/api/review/summary") });
+  // Without an explicit tab, open the first one that has something to do.
+  const firstOpen = TABS.find((t) => (summary.data?.[t.id]?.open ?? 0) > 0)?.id;
+  const type = (params.get("type") as IssueType) || firstOpen || TABS[0].id;
   const status = params.get("status") === "ignored" ? "ignored" : "open";
   const page = Number(params.get("page") ?? 1);
   const libraryId = params.get("library") ?? "";
@@ -86,9 +97,9 @@ export default function ReviewPage() {
   };
   useEffect(() => setSelected(new Set()), [type, status, page, libraryId, q]);
 
-  const summary = useQuery({ queryKey: ["review", "summary"], queryFn: () => api.get<ReviewSummary>("/api/review/summary") });
   const list = useQuery({
     queryKey: ["issues", type, status, libraryId, q, page],
+    enabled: summary.isFetched || params.has("type"),
     queryFn: () =>
       api.get<{ total: number; page: number; page_size: number; issues: Issue[] }>(
         `/api/review/issues${qs({ type, status, library_id: libraryId, q, page, page_size: 50 })}`,
@@ -277,6 +288,8 @@ function IssueRow({ issue, servers, onChoose }: { issue: Issue; servers: Map<num
       {issue.title}
     </Link>
   );
+
+  if (issue.type === "mismatch") return <MismatchRow issue={issue} servers={servers} />;
 
   if (issue.type === "poster_differs") {
     const entries = d.servers as { server_id: number; server_item_id?: number; server_collection_id?: number; has_poster: boolean; kometa_overlay: boolean }[];

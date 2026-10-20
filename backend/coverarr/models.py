@@ -160,6 +160,10 @@ class ServerItem(Base):
     # It changes whenever the poster changes, which is how we avoid re-downloading.
     poster_ref: Mapped[str | None] = mapped_column(String(500))
     labels: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Media file (movie) or folder (show) as the server sees it, and the mount-independent
+    # key used to spot the same file matched to different titles on different servers.
+    path: Mapped[str | None] = mapped_column(String(1000))
+    file_key: Mapped[str | None] = mapped_column(String(500), index=True)
     # Perceptual hash of the poster and the poster_ref it was computed for.
     poster_hash: Mapped[str | None] = mapped_column(String(32))
     poster_hash_ref: Mapped[str | None] = mapped_column(String(500))

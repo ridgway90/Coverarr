@@ -36,6 +36,9 @@ async def update_settings(body: dict[str, Any], session: AsyncSession = Depends(
                 raise HTTPException(422, "poster_match_threshold must be a number") from exc
             if not 0 <= value <= 32:
                 raise HTTPException(422, "poster_match_threshold must be between 0 and 32")
+        elif key == "server_load":
+            if value not in ("gentle", "normal", "fast"):
+                raise HTTPException(422, "server_load must be gentle, normal or fast")
         elif isinstance(value, str):
             value = value.strip()
         await set_setting(session, key, value)

@@ -2,15 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from coverarr.clients import MediaServerError, RemoteLibrary, client_for
-from coverarr.models import Collection, Server, ServerCollection, ServerItem, ServerLibrary
+from coverarr.clients import (
+    MatchTarget,
+    MediaServerClient,
+    MediaServerError,
+    RemoteLibrary,
+    client_for,
+)
+from coverarr.clients.base import RemoteItem
+from coverarr.models import Collection, Issue, Server, ServerCollection, ServerItem, ServerLibrary
+from coverarr.services.importer import apply_remote_item
 from coverarr.services.jobs import JobContext
+from coverarr.services.matching import match_all
 from coverarr.services.review import refresh_issues
 
 
@@ -141,3 +151,86 @@ async def run_collection_sync(ctx: JobContext) -> dict[str, Any]:
         await session.commit()
     await ctx.progress(1.0, "Collections updated")
     return {"collections": len(ids), "failures": failures, "issues": issues}
+
+
+MATCH_POLL_ATTEMPTS = 10
+MATCH_POLL_SECONDS = 2.0
+
+
+async def _wait_for_ids(
+    client: MediaServerClient, remote_id: str, kind: str, wanted: dict[str, str]
+) -> RemoteItem | None:
+    """Servers refresh metadata after a re-match in the background; wait for the new ids."""
+    for attempt in range(MATCH_POLL_ATTEMPTS):
+        item = await client.get_item(remote_id, kind)
+        if any(getattr(item, k) == v for k, v in wanted.items()):
+            return item
+        if attempt < MATCH_POLL_ATTEMPTS - 1:
+            await asyncio.sleep(MATCH_POLL_SECONDS)
+    return None
+
+
+async def run_fix_match(ctx: JobContext) -> dict[str, Any]:
+    """Re-match the servers that disagree with the user's chosen identity for a file."""
+    target = MatchTarget(**ctx.params["target"])
+    wanted = {f"{k}_id": v for k, v in target.ids().items()}
+    if not wanted:
+        raise ValueError("A TMDb, TVDB or IMDb id is required")
+    async with ctx.sessionmaker() as session:
+        issue = await session.get(Issue, ctx.params["issue_id"])
+        if issue is None or issue.type != "mismatch":
+            raise ValueError("That mismatch no longer exists; run an import to refresh")
+        ids = [
+            si["server_item_id"] for c in issue.details["candidates"] for si in c["server_items"]
+        ]
+        rows = (
+            await session.execute(
+                select(ServerItem, Server)
+                .join(Server, Server.id == ServerItem.server_id)
+                .where(ServerItem.id.in_(ids))
+            )
+        ).all()
+    to_fix = [
+        (si, srv) for si, srv in rows if not any(getattr(si, k) == v for k, v in wanted.items())
+    ]
+    label = target.title or ", ".join(f"{k}-{v}" for k, v in target.ids().items())
+    if not to_fix:
+        await ctx.log(f"Every server already matches {label}")
+
+    fixed = pending = failed = 0
+    for idx, (si, server) in enumerate(to_fix):
+        await ctx.progress(
+            idx / max(len(to_fix), 1) * 0.8, f"{server.name}: re-matching {si.title}"
+        )
+        try:
+            async with client_for(server) as client:
+                description = await client.fix_match(si.remote_id, si.kind, target)
+                await ctx.log(f"{server.name}: re-matched '{si.title}' to {description}")
+                remote = await _wait_for_ids(client, si.remote_id, si.kind, wanted)
+        except MediaServerError as exc:
+            failed += 1
+            await ctx.log(f"{server.name}: could not re-match '{si.title}': {exc}")
+            continue
+        if remote is None:
+            pending += 1
+            await ctx.log(
+                f"{server.name}: still reports the old match; check it on the server, "
+                "the next import picks up any change"
+            )
+            continue
+        async with ctx.sessionmaker() as session:
+            row = await session.get(ServerItem, si.id)
+            if row is not None:
+                apply_remote_item(row, remote)
+                await session.commit()
+        fixed += 1
+
+    await ctx.progress(0.85, "Re-matching across servers")
+    async with ctx.sessionmaker() as session:
+        await match_all(session)
+        issues = await refresh_issues(session)
+        await session.commit()
+    await ctx.progress(1.0, "Done")
+    if to_fix and failed == len(to_fix):
+        raise RuntimeError("No server accepted the new match; see the log")
+    return {"fixed": fixed, "pending": pending, "failed": failed, "issues": issues}

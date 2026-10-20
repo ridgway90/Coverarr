@@ -48,6 +48,26 @@ class RemoteItem:
     episode_number: int | None = None
     poster_ref: str | None = None
     labels: list[str] = field(default_factory=list)
+    # Media file (movies, episodes) or folder (shows) as the server sees it.
+    path: str | None = None
+
+
+@dataclass(slots=True)
+class MatchTarget:
+    """The identity to re-match an item to."""
+
+    tmdb_id: str | None = None
+    tvdb_id: str | None = None
+    imdb_id: str | None = None
+    title: str | None = None
+    year: int | None = None
+
+    def ids(self) -> dict[str, str]:
+        return {
+            k: v
+            for k, v in (("tmdb", self.tmdb_id), ("tvdb", self.tvdb_id), ("imdb", self.imdb_id))
+            if v
+        }
 
 
 @dataclass(slots=True)
@@ -161,6 +181,17 @@ class MediaServerClient(ABC):
         self, library: RemoteLibrary, name: str, member_ids: list[str]
     ) -> str:
         """Create a collection containing ``member_ids``; returns its remote id."""
+
+    @abstractmethod
+    async def get_item(self, item_id: str, kind: ItemKind) -> RemoteItem:
+        """Fetch one movie or show fresh from the server."""
+
+    @abstractmethod
+    async def fix_match(self, item_id: str, kind: ItemKind, target: MatchTarget) -> str:
+        """Re-match a movie or show to ``target`` using the server's own matching.
+
+        Returns a short description of what the server matched it to.
+        """
 
     @abstractmethod
     async def add_to_collection(

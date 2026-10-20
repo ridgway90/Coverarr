@@ -9,6 +9,7 @@ from typing import Any
 from coverarr import __version__
 from coverarr.clients.base import (
     ItemKind,
+    MatchTarget,
     MediaServerClient,
     MediaServerError,
     RemoteCollection,
@@ -25,7 +26,7 @@ ITEM_TYPES: dict[str, str] = {
     "episode": "Episode",
 }
 LIBRARY_KINDS = {"movies": "movie", "tvshows": "show"}
-FIELDS = "ProviderIds,SortName,ProductionYear,Tags,Overview"
+FIELDS = "ProviderIds,SortName,ProductionYear,Tags,Overview,Path"
 
 
 def provider_ids(item: dict[str, Any]) -> dict[str, str]:
@@ -126,6 +127,7 @@ class JellyfinClient(MediaServerClient):
             imdb_id=ids.get("imdb"),
             poster_ref=(row.get("ImageTags") or {}).get("Primary"),
             labels=[str(t) for t in row.get("Tags") or []],
+            path=row.get("Path"),
         )
         if kind == "season":
             item.show_id = row.get("SeriesId")
@@ -136,6 +138,43 @@ class JellyfinClient(MediaServerClient):
             item.season_number = to_int(row.get("ParentIndexNumber"))
             item.episode_number = to_int(row.get("IndexNumber"))
         return item
+
+    async def get_item(self, item_id: str, kind: ItemKind) -> RemoteItem:
+        uid = await self.user_id()
+        row = await self._json("GET", f"/Users/{uid}/Items/{item_id}")
+        if not row.get("Id"):
+            raise MediaServerError(f"{self.kind}: item {item_id} not found")
+        return self._to_item(row, kind)
+
+    async def fix_match(self, item_id: str, kind: ItemKind, target: MatchTarget) -> str:
+        wanted = target.ids()
+        info: dict[str, Any] = {
+            "ProviderIds": {k.capitalize(): v for k, v in wanted.items()},
+        }
+        if target.title:
+            info["Name"] = target.title
+        if target.year:
+            info["Year"] = target.year
+        search_type = "Movie" if kind == "movie" else "Series"
+        results = await self._json(
+            "POST",
+            f"/Items/RemoteSearch/{search_type}",
+            json={"SearchInfo": info, "ItemId": item_id},
+        )
+        results = results if isinstance(results, list) else []
+        exact = [r for r in results if wanted.items() & provider_ids(r).items()]
+        pick = (exact or (results if len(results) == 1 else []) or [None])[0]
+        if pick is None:
+            raise MediaServerError(
+                f"{self.kind}: no unambiguous search result for {target.title or wanted}"
+            )
+        await self._request(
+            "POST",
+            f"/Items/RemoteSearch/Apply/{item_id}",
+            params={"ReplaceAllImages": "false"},
+            json=pick,
+        )
+        return f"{pick.get('Name')} ({pick.get('ProductionYear')})"
 
     async def collections(self, libraries: list[RemoteLibrary]) -> list[RemoteCollection]:
         # Box sets aren't tied to a library; the importer infers that from the members.

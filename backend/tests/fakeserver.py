@@ -34,8 +34,15 @@ MOVIES = [
     ("Paddington", 2014, "116149", "tt1109624"),
     ("Paddington 2", 2017, "346648", "tt4468740"),
     ("Arrival", 2016, "329865", "tt2543164"),
+    ("9", 2009, "12244", "tt0472033"),  # Plex has it matched to "9 Songs"
     ("Family Holiday 2019", 2019, None, None),  # home video: no provider ids anywhere
 ]
+# What the fake metadata agents know: tmdb -> (title, year, imdb), tvdb -> (title, year).
+MOVIE_CATALOG = {tmdb: (t, y, imdb) for t, y, tmdb, imdb in MOVIES if tmdb}
+MOVIE_CATALOG["27"] = ("9 Songs", 2004, "tt0411705")
+SHOW_CATALOG = {"75592": ("Spaced", 1999), "72216": ("Black Books", 2000)}
+# Each server mounts the same media somewhere different.
+MOUNTS = {"plex": "/data/media", "jellyfin": "/media", "emby": "/mnt/media"}
 SHOWS = [
     # title, year, tvdb, seasons x episodes
     ("Spaced", 1999, "75592", 2, 7),
@@ -98,6 +105,13 @@ class Item:
     art_version: int = 1
     overlay: bool = False
     alt_art: bool = False
+    file: str | None = None  # media file (movie/episode) or folder (show)
+
+    def rematch(self, title: str, year: int | None, ids: dict[str, str]) -> None:
+        """What a server does on "Fix match": new identity and artwork, same file."""
+        self.title, self.year, self.ids = title, year, ids
+        self.art_seed = f"{self.kind}:{title}"
+        self.art_version += 1
 
 
 @dataclass
@@ -154,25 +168,42 @@ class FakeServer:
         return poster_png(item.art_seed, width=width or 400, overlay=item.overlay, alt=item.alt_art)
 
 
-def populate(server: FakeServer, *, skip_movies=(), skip_episodes=(), overlays=False, alt_art=()):
+def populate(
+    server: FakeServer,
+    *,
+    skip_movies=(),
+    skip_episodes=(),
+    overlays=False,
+    alt_art=(),
+    mismatched: dict[str, str] | None = None,
+):
+    """``mismatched`` maps a title to the tmdb id the server has wrongly matched it to."""
+    mount = MOUNTS[server.kind]
     movies_lib = server.add_library("Films" if server.kind == "plex" else "Movies", "movie")
     tv_lib = server.add_library("TV Programmes" if server.kind == "plex" else "Shows", "show")
     for title, year, tmdb, imdb in MOVIES:
         if title in skip_movies:
             continue
         ids = {k: v for k, v in (("tmdb", tmdb), ("imdb", imdb)) if v}
+        name = f"{title} ({year})" + (f" {{tmdb-{tmdb}}}" if tmdb else "")
+        shown_title, shown_year = title, year
+        if mismatched and title in mismatched:
+            wrong = mismatched[title]
+            shown_title, shown_year, wrong_imdb = MOVIE_CATALOG[wrong]
+            ids = {"tmdb": wrong, "imdb": wrong_imdb}
         server.add(
             Item(
                 server.new_id(),
                 "movie",
-                title,
+                shown_title,
                 movies_lib,
-                year,
+                shown_year,
                 ids,
                 labels=["Overlay"] if overlays else [],
-                art_seed=f"movie:{title}",
+                art_seed=f"movie:{shown_title}",
                 overlay=overlays,
                 alt_art=title in alt_art,
+                file=f"{mount}/Movies/{name}/{name} [WEBDL-1080p].mkv",
             )
         )
     for title, year, tvdb, seasons, episodes in SHOWS:
@@ -185,6 +216,7 @@ def populate(server: FakeServer, *, skip_movies=(), skip_episodes=(), overlays=F
                 year,
                 {"tvdb": tvdb},
                 art_seed=f"show:{title}",
+                file=f"{mount}/TV/{title} ({year}) {{tvdb-{tvdb}}}",
             )
         )
         for s in range(1, seasons + 1):
@@ -214,6 +246,7 @@ def populate(server: FakeServer, *, skip_movies=(), skip_episodes=(), overlays=F
                         index=e,
                         parent_index=s,
                         art_seed=f"ep:{title}:{s}:{e}",
+                        file=f"{show.file}/Season {s:02d}/{title} - S{s:02d}E{e:02d}.mkv",
                     )
                 )
     return movies_lib, tv_lib
@@ -221,7 +254,7 @@ def populate(server: FakeServer, *, skip_movies=(), skip_episodes=(), overlays=F
 
 def default_servers() -> dict[str, FakeServer]:
     plex = FakeServer("plex", "plex-token", "Fake Plex")
-    films, _ = populate(plex, overlays=True, alt_art={"Arrival"})
+    films, _ = populate(plex, overlays=True, alt_art={"Arrival"}, mismatched={"9": "27"})
     plex.add_collection(
         "Cornetto Collection", films, ["Shaun of the Dead", "Hot Fuzz", "The World's End"]
     )
@@ -239,6 +272,38 @@ def default_servers() -> dict[str, FakeServer]:
     populate(emby, skip_movies={"Arrival"}, skip_episodes={("Black Books", 3, 6)})
     emby.add_collection("Paddington Collection", "", ["Paddington", "Paddington 2"])
     return {"plex": plex, "jellyfin": jf, "emby": emby}
+
+
+# --- shared helpers -------------------------------------------------------------------------
+
+
+def _missing():
+    raise HTTPException(404)
+
+
+def search_catalog(kind: str, query: str) -> list[tuple[str, tuple[str, int | None]]]:
+    """Agent search: "tmdb-123"/"tvdb-123"/"imdb-tt123", or a title. Keys are tmdb/tvdb ids."""
+    query = query.strip()
+    if kind == "movie":
+        entries = {k: (t, y) for k, (t, y, _) in MOVIE_CATALOG.items()}
+        by_imdb = {imdb: k for k, (_, _, imdb) in MOVIE_CATALOG.items()}
+    else:
+        entries, by_imdb = dict(SHOW_CATALOG), {}
+    scheme, _, value = query.partition("-")
+    if scheme in ("tmdb", "tvdb") and value in entries:
+        return [(value, entries[value])]
+    if scheme == "imdb" and value in by_imdb:
+        return [(by_imdb[value], entries[by_imdb[value]])]
+    return [(k, v) for k, v in entries.items() if v[0].lower() == query.lower()]
+
+
+def apply_catalog(item: Item, key: str) -> None:
+    if item.kind == "movie":
+        title, year, imdb = MOVIE_CATALOG[key]
+        item.rematch(title, year, {"tmdb": key, "imdb": imdb})
+    else:
+        title, year = SHOW_CATALOG[key]
+        item.rematch(title, year, {"tvdb": key})
 
 
 # --- Plex API ---------------------------------------------------------------------------------
@@ -278,6 +343,9 @@ def plex_router(srv: FakeServer) -> APIRouter:
         if item.kind in ("movie", "show"):
             out["guid"] = f"plex://{item.kind}/{item.id}"
             out["Guid"] = [{"id": f"{k}://{v}"} for k, v in item.ids.items()]
+        if item.file and item.kind in ("movie", "episode"):
+            # Shows deliberately get no Location: real listings often omit it.
+            out["Media"] = [{"Part": [{"file": item.file}]}]
         if item.kind == "season":
             out.update(parentRatingKey=item.show, index=item.index)
         if item.kind == "episode":
@@ -356,6 +424,37 @@ def plex_router(srv: FakeServer) -> APIRouter:
             raise HTTPException(404)
         return page(request, [meta(srv.items[m]) for m in coll.members])
 
+    @r.get("/library/metadata/{rk}")
+    async def metadata(rk: str, request: Request):
+        auth(request)
+        item = srv.items.get(rk) or _missing()
+        out = meta(item)
+        out["Label"] = [{"tag": t} for t in item.labels]
+        return {"MediaContainer": {"Metadata": [out]}}
+
+    @r.get("/library/metadata/{rk}/matches")
+    async def matches(rk: str, request: Request):
+        auth(request)
+        item = srv.items.get(rk) or _missing()
+        return {
+            "MediaContainer": {
+                "SearchResult": [
+                    {"guid": f"plex://{item.kind}/{key}", "name": t, "year": y, "score": 100}
+                    for key, (t, y) in search_catalog(
+                        item.kind, request.query_params.get("title", "")
+                    )
+                ]
+            }
+        }
+
+    @r.put("/library/metadata/{rk}/match")
+    async def match(rk: str, request: Request):
+        auth(request)
+        item = srv.items.get(rk) or _missing()
+        key = request.query_params["guid"].rsplit("/", 1)[1]
+        apply_catalog(item, key)
+        return {}
+
     @r.get("/library/metadata/{rk}/thumb/{ts}")
     async def thumb(rk: str, ts: str, request: Request):
         auth(request)
@@ -424,6 +523,8 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
         }
         if item.year:
             out["ProductionYear"] = item.year
+        if item.file:
+            out["Path"] = item.file
         if item.kind in ("movie", "show"):
             out["ProviderIds"] = {k.capitalize(): v for k, v in item.ids.items()}
         if item.kind == "season":
@@ -495,6 +596,37 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
         auth(request)
         width = request.query_params.get("maxWidth")
         return Response(srv.image(item_id, int(width) if width else None), media_type="image/png")
+
+    @r.get("/Users/{uid}/Items/{item_id}")
+    async def item(uid: str, item_id: str, request: Request):
+        auth(request)
+        found = srv.items.get(item_id) or _missing()
+        return row(found)
+
+    @r.post("/Items/RemoteSearch/{search_type}")
+    async def remote_search(search_type: str, request: Request):
+        auth(request)
+        body = await request.json()
+        info = body.get("SearchInfo", {})
+        kind = "movie" if search_type == "Movie" else "show"
+        ids = {k.lower(): v for k, v in (info.get("ProviderIds") or {}).items()}
+        query = next((f"{k}-{v}" for k, v in ids.items()), info.get("Name", ""))
+        out = []
+        for key, (title, year) in search_catalog(kind, query):
+            provider = (
+                {"Tmdb": key, "Imdb": MOVIE_CATALOG[key][2]} if kind == "movie" else {"Tvdb": key}
+            )
+            out.append({"Name": title, "ProductionYear": year, "ProviderIds": provider})
+        return out
+
+    @r.post("/Items/RemoteSearch/Apply/{item_id}")
+    async def remote_apply(item_id: str, request: Request):
+        auth(request)
+        found = srv.items.get(item_id) or _missing()
+        body = await request.json()
+        ids = body["ProviderIds"]
+        apply_catalog(found, ids.get("Tmdb") or ids["Tvdb"])
+        return Response(status_code=204)
 
     @r.post("/Collections")
     async def create(request: Request):

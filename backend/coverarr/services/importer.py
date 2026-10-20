@@ -6,10 +6,12 @@ deleted afterwards. A server that fails part-way keeps its previous data untouch
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -17,7 +19,9 @@ from sqlalchemy.orm import selectinload
 from coverarr.clients import MediaServerClient, MediaServerError, RemoteLibrary, client_for
 from coverarr.clients.base import RemoteCollection, RemoteItem
 from coverarr.models import Library, Server, ServerCollection, ServerItem, ServerLibrary, utcnow
+from coverarr.services.files import file_key, show_folder
 from coverarr.services.jobs import JobContext
+from coverarr.services.load import LoadProfile, load_profile
 from coverarr.services.matching import match_all, normalize_title
 from coverarr.services.review import refresh_issues
 
@@ -38,6 +42,8 @@ ITEM_FIELDS = (
     "episode_number",
     "poster_ref",
     "labels",
+    "path",
+    "file_key",
 )
 
 
@@ -108,7 +114,15 @@ def _item_values(item: RemoteItem) -> dict[str, Any]:
         "episode_number": item.episode_number,
         "poster_ref": item.poster_ref,
         "labels": item.labels,
+        "path": item.path,
+        "file_key": file_key(item.path, item.kind) if item.kind in ("movie", "show") else None,
     }
+
+
+def apply_remote_item(row: ServerItem, item: RemoteItem) -> None:
+    """Refresh one stored row from a freshly fetched remote item."""
+    for field_name, value in _item_values(item).items():
+        setattr(row, field_name, value)
 
 
 async def upsert_items(
@@ -176,25 +190,75 @@ async def upsert_collections(
     )
 
 
+async def fill_show_paths(session: AsyncSession, sl_id: int) -> None:
+    """Give shows without a folder path (Plex listings often omit it) one from an episode."""
+    missing = set(
+        await session.scalars(
+            select(ServerItem.remote_id).where(
+                ServerItem.server_library_id == sl_id,
+                ServerItem.kind == "show",
+                ServerItem.path.is_(None),
+            )
+        )
+    )
+    if not missing:
+        return
+    rows = await session.execute(
+        select(ServerItem.show_remote_id, func.min(ServerItem.path))
+        .where(
+            ServerItem.server_library_id == sl_id,
+            ServerItem.kind == "episode",
+            ServerItem.path.is_not(None),
+            ServerItem.show_remote_id.in_(missing),
+        )
+        .group_by(ServerItem.show_remote_id)
+    )
+    for show_remote_id, episode_path in rows:
+        folder = show_folder(episode_path)
+        await session.execute(
+            update(ServerItem)
+            .where(ServerItem.server_library_id == sl_id, ServerItem.remote_id == show_remote_id)
+            .values(path=folder, file_key=file_key(folder, "show"))
+        )
+
+
+Report = Callable[[float, str], Awaitable[None]]
+
+
 async def import_server(
-    ctx: JobContext, server_id: int, run_id: int, base: float, span: float
+    ctx: JobContext,
+    server_id: int,
+    run_id: int,
+    report: Report,
+    profile: LoadProfile,
+    db_lock: asyncio.Lock,
 ) -> dict[str, Any]:
+    """Import one server. Network calls run freely; database writes take ``db_lock`` so
+    several servers can import at once without SQLite lock contention."""
     sm = ctx.sessionmaker
     async with sm() as session:
-        server = await session.get(Server, server_id, options=[selectinload(Server.libraries)])
-        assert server is not None
-        client: MediaServerClient = client_for(server)
+        async with db_lock:
+            server = await session.get(Server, server_id, options=[selectinload(Server.libraries)])
+            assert server is not None
+            await session.commit()
+        client: MediaServerClient = client_for(server, concurrency=profile.concurrency)
+        client.page_size = profile.page_size
         async with client:
             try:
                 info = await client.server_info()
+                remote_libs = await client.libraries()
             except MediaServerError as exc:
-                server.last_error = str(exc)
-                await session.commit()
+                async with db_lock:
+                    server.last_error = str(exc)
+                    session.add(server)
+                    await session.commit()
                 raise
-            server.remote_id, server.version = info.remote_id, info.version
-            server.last_ok_at, server.last_error = utcnow(), None
-            active = await sync_libraries(session, server, await client.libraries())
-            await session.commit()
+            async with db_lock:
+                session.add(server)
+                server.remote_id, server.version = info.remote_id, info.version
+                server.last_ok_at, server.last_error = utcnow(), None
+                active = await sync_libraries(session, server, remote_libs)
+                await session.commit()
             await ctx.log(
                 f"{server.name}: connected ({info.name} {info.version or ''}), "
                 f"{len(active)} libraries"
@@ -202,29 +266,35 @@ async def import_server(
 
             counts: dict[str, int] = {}
             for idx, (sl, remote) in enumerate(active):
-                lib_base = base + span * 0.9 * idx / max(len(active), 1)
+                fraction = 0.9 * idx / max(len(active), 1)
                 for kind in KINDS_FOR_LIBRARY[sl.kind]:
                     n = 0
                     async for page in client.items(remote, kind):
-                        await upsert_items(session, server.id, sl.id, page, run_id)
-                        # Commit per page so the UI's own writes never wait long on the lock.
-                        await session.commit()
+                        async with db_lock:
+                            await upsert_items(session, server.id, sl.id, page, run_id)
+                            # Commit per page so other writers never wait long on the lock.
+                            await session.commit()
                         n += len(page)
-                        await ctx.progress(lib_base, f"{server.name} / {sl.name}: {n} {kind}s")
+                        await report(fraction, f"{server.name} / {sl.name}: {n} {kind}s")
                     counts[kind] = counts.get(kind, 0) + n
-                await session.execute(
-                    delete(ServerItem).where(
-                        ServerItem.server_library_id == sl.id, ServerItem.seen_run != run_id
+                async with db_lock:
+                    await session.execute(
+                        delete(ServerItem).where(
+                            ServerItem.server_library_id == sl.id, ServerItem.seen_run != run_id
+                        )
                     )
-                )
-                await session.commit()
+                    if sl.kind == "show":
+                        await fill_show_paths(session, sl.id)
+                    await session.commit()
 
-            await ctx.progress(base + span * 0.9, f"{server.name}: collections")
+            await report(0.9, f"{server.name}: collections")
             remote_collections = await client.collections([remote for _, remote in active])
             sl_by_remote = {sl.remote_id: sl.id for sl, _ in active}
-            await upsert_collections(session, server, remote_collections, sl_by_remote, run_id)
-            await session.commit()
+            async with db_lock:
+                await upsert_collections(session, server, remote_collections, sl_by_remote, run_id)
+                await session.commit()
             counts["collection"] = len(remote_collections)
+            await report(1.0, f"{server.name}: done")
             await ctx.log(f"{server.name}: " + ", ".join(f"{v} {k}s" for k, v in counts.items()))
             return counts
 
@@ -236,25 +306,39 @@ async def run_import(ctx: JobContext) -> dict[str, Any]:
         if ctx.params.get("server_ids"):
             query = query.where(Server.id.in_(ctx.params["server_ids"]))
         servers = (await session.execute(query)).all()
+        profile = await load_profile(session)
     if not servers:
         raise RuntimeError("No enabled servers to import from")
 
     result: dict[str, Any] = {"servers": {}, "errors": {}}
-    span = 0.85 / len(servers)
     status = ctx.state["servers"] = {str(server_id): "waiting" for server_id, _ in servers}
-    for idx, (server_id, name) in enumerate(servers):
+    fractions = {server_id: 0.0 for server_id, _ in servers}
+    db_lock = asyncio.Lock()
+
+    async def one(server_id: int, name: str) -> None:
+        async def report(fraction: float, message: str) -> None:
+            fractions[server_id] = fraction
+            await ctx.progress(0.85 * sum(fractions.values()) / len(fractions), message)
+
         status[str(server_id)] = "importing"
         try:
             result["servers"][name] = await import_server(
-                ctx, server_id, ctx.job_id, idx * span, span
+                ctx, server_id, ctx.job_id, report, profile, db_lock
             )
             status[str(server_id)] = "done"
         except Exception as exc:
             status[str(server_id)] = "failed"
+            fractions[server_id] = 1.0
             if not isinstance(exc, MediaServerError):
                 log.exception("Import from %s failed", name)
             result["errors"][name] = str(exc)
             await ctx.log(f"{name}: import failed, keeping previous data: {exc}")
+
+    if profile.parallel_servers:
+        await asyncio.gather(*(one(server_id, name) for server_id, name in servers))
+    else:
+        for server_id, name in servers:
+            await one(server_id, name)
 
     await ctx.progress(0.87, "Matching items across servers")
     async with sm() as session:

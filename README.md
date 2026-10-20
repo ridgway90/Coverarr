@@ -16,6 +16,12 @@ possible: it tracks what each server already has and only touches what actually 
   **matches them by TMDb/TVDB/IMDb id**. Titles with no ids fall back to title and year.
   Libraries are paired automatically (e.g. Plex "Films" ↔ Jellyfin "Movies"); you can change
   pairings in *Settings → Library mapping*.
+- **Mismatch detection.** Your servers share the same files, so if one file is "9" on
+  Jellyfin but "9 Songs" on Plex, one of them is wrong. Coverarr lists these with a best guess
+  and its reasons (IDs in the file name, how many servers agree, title/year) and re-matches
+  the wrong server through its own "fix match" once you confirm. You can also enter any
+  TMDb/TVDB id yourself. If your choice contradicts the file name, it reminds you to fix
+  Radarr/Sonarr too.
 - **Review screen** listing every difference between servers:
   - collections missing on a server → **create them there** in one click (or all at once)
   - collections whose members differ → **add the missing members** (nothing is ever removed)
@@ -29,6 +35,8 @@ possible: it tracks what each server already has and only touches what actually 
   changes, so re-scans only download posters that changed, and thumbnails are cached on disk.
   A full import of ~3,800 movies, 700 shows, 28,000 episodes and 480 collections across three
   servers takes well under a minute.
+- **Server load setting** (gentle / normal / fast). Normal imports all servers at once;
+  gentle goes one at a time with fewer parallel requests.
 - Single admin login, activity log for every import, scan and change pushed to a server.
 
 ## Install (Docker, e.g. a Debian LXC on Proxmox)

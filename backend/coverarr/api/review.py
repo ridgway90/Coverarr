@@ -15,7 +15,11 @@ from coverarr.services.review import ISSUE_TYPES
 router = APIRouter(prefix="/api/review", tags=["review"])
 
 IssueType = Literal[
-    "item_missing", "poster_differs", "collection_missing", "collection_members_differ"
+    "mismatch",
+    "item_missing",
+    "poster_differs",
+    "collection_missing",
+    "collection_members_differ",
 ]
 
 
@@ -138,3 +142,40 @@ async def bulk_action(
         updated += 1
     await session.commit()
     return {"updated": updated, "skipped": skipped}
+
+
+class MatchTargetIn(BaseModel):
+    tmdb_id: str | None = None
+    tvdb_id: str | None = None
+    imdb_id: str | None = None
+    title: str | None = None
+    year: int | None = None
+
+
+class FixMatch(BaseModel):
+    target: MatchTargetIn
+
+
+@router.post("/issues/{issue_id}/fix-match")
+async def fix_match(
+    issue_id: int, body: FixMatch, request: Request, session: AsyncSession = Depends(get_session)
+):
+    issue = await session.get(Issue, issue_id)
+    if issue is None or issue.type != "mismatch":
+        raise HTTPException(404, "Mismatch not found")
+    target = {
+        k: (v.strip() if isinstance(v, str) else v) or None
+        for k, v in body.target.model_dump().items()
+    }
+    if not (target["tmdb_id"] or target["tvdb_id"] or target["imdb_id"]):
+        raise HTTPException(422, "Give a TMDb, TVDB or IMDb id to match to")
+    if target["tmdb_id"] and not target["tmdb_id"].isdigit():
+        raise HTTPException(422, "TMDb ids are numbers")
+    if target["tvdb_id"] and not target["tvdb_id"].isdigit():
+        raise HTTPException(422, "TVDB ids are numbers")
+    if target["imdb_id"] and not target["imdb_id"].startswith("tt"):
+        raise HTTPException(422, "IMDb ids look like tt0123456")
+    job = await request.app.state.jobs.enqueue(
+        "fix_match", {"issue_id": issue_id, "target": target}
+    )
+    return {"job_id": job.id}

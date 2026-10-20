@@ -6,6 +6,7 @@ import { api, type IssueType } from "../lib/api";
 import { jobLabel, useActiveJobs } from "../lib/hooks";
 
 const ISSUE_LABELS: Record<IssueType, string> = {
+  mismatch: "Files matched to different titles",
   collection_missing: "Collections missing on a server",
   collection_members_differ: "Collections with different members",
   poster_differs: "Posters that differ between servers",

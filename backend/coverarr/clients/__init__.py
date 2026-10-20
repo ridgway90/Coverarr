@@ -1,4 +1,5 @@
 from coverarr.clients.base import (
+    MatchTarget,
     MediaServerClient,
     MediaServerError,
     RemoteCollection,
@@ -37,6 +38,7 @@ __all__ = [
     "CLIENTS",
     "EmbyClient",
     "JellyfinClient",
+    "MatchTarget",
     "MediaServerClient",
     "MediaServerError",
     "PlexClient",

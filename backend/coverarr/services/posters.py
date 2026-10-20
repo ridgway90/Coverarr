@@ -23,6 +23,7 @@ from coverarr.clients import MediaServerClient, MediaServerError, client_for
 from coverarr.models import Server, ServerCollection, ServerItem
 from coverarr.services.client_pool import ClientPool
 from coverarr.services.jobs import JobContext
+from coverarr.services.load import load_profile
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +97,7 @@ async def run_poster_scan(ctx: JobContext) -> dict[str, Any]:
     async with sm() as session:
         servers = list(await session.scalars(select(Server).where(Server.enabled.is_(True))))
         work = {s.id: await _pending(session, s.id) for s in servers}
+        profile = await load_profile(session)
     total = sum(len(v) for v in work.values())
     await ctx.log(f"{total} posters to fingerprint")
     done = 0
@@ -107,7 +109,7 @@ async def run_poster_scan(ctx: JobContext) -> dict[str, Any]:
         rows = work[server.id]
         if not rows:
             return
-        async with client_for(server, concurrency=6) as client:
+        async with client_for(server, concurrency=profile.poster_concurrency) as client:
             for start in range(0, len(rows), 100):
                 batch = rows[start : start + 100]
                 hashes = await asyncio.gather(
