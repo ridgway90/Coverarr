@@ -100,6 +100,15 @@ class ListClient:
             return {"Authorization": f"Bearer {self.tmdb_key}"}, {}
         return {}, {"api_key": self.tmdb_key}
 
+    async def tmdb_json(self, path: str, **params: Any) -> dict[str, Any]:
+        headers, auth = self._tmdb_auth()
+        return (
+            await self._get(f"{TMDB_API}{path}", headers=headers, params={**auth, **params})
+        ).json()
+
+    async def download(self, url: str) -> bytes:
+        return (await self._get(url)).content
+
     async def tmdb_list(self, list_id: str) -> list[ListEntry]:
         headers, params = self._tmdb_auth()
         entries: list[ListEntry] = []

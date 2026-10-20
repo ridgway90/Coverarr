@@ -6,7 +6,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.clients import MediaServerError
@@ -201,12 +201,26 @@ def preferred_poster(
     return (clean or with_poster or [None])[0]
 
 
+def initial_of(expr: Any) -> Any:
+    """SQL for the A-Z bar: first letter, ignoring a leading "The"/"A"/"An"; "#" otherwise."""
+    lowered = func.lower(expr)
+    trimmed = case(
+        (func.substr(lowered, 1, 4) == "the ", func.substr(expr, 5)),
+        (func.substr(lowered, 1, 3) == "an ", func.substr(expr, 4)),
+        (func.substr(lowered, 1, 2) == "a ", func.substr(expr, 3)),
+        else_=expr,
+    )
+    first = func.upper(func.substr(func.ltrim(trimmed), 1, 1))
+    return case((first.between("A", "Z"), first), else_="#")
+
+
 @router.get("/items")
 async def list_items(
     library_id: int,
     q: str | None = None,
     missing_on: int | None = None,
     issues: Literal["any", "poster", "push", "missing"] | None = None,
+    letter: str | None = Query(None, pattern="^[A-Z#]$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(60, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
@@ -240,6 +254,14 @@ async def list_items(
                 ),
                 MediaItem.id.in_(pending),
             )
+        )
+    # Titles per first letter (with the other filters applied), for the A-Z bar.
+    sub = query.subquery()
+    first = initial_of(func.coalesce(sub.c.sort_title, sub.c.title))
+    letters = dict((await session.execute(select(first, func.count()).group_by(first))).all())
+    if letter:
+        query = query.where(
+            initial_of(func.coalesce(MediaItem.sort_title, MediaItem.title)) == letter
         )
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
     items = list(
@@ -275,6 +297,7 @@ async def list_items(
     return {
         "total": total,
         "unscanned": unscanned,
+        "letters": letters,
         "page": page,
         "page_size": page_size,
         "items": [

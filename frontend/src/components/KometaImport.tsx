@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, ExternalLink, FileUp, FolderOpen, ListChecks, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, type Job } from "../lib/api";
+import { api, uploadWithProgress, type Job } from "../lib/api";
 import { useLibraries, useServers } from "../lib/hooks";
 import { Button, Card, ErrorNote, Field, PresenceChips, ServerChip, cx, formatDate, inputClass, selectClass } from "./ui";
 
@@ -41,28 +41,6 @@ const KEY_LABELS: Record<string, string> = {
   trakt_access_token: "Trakt access token",
   trakt_refresh_token: "Trakt refresh token",
 };
-
-/** POST multipart with upload progress (fetch can't report it). */
-function uploadWithProgress<T>(url: string, form: FormData, onProgress: (fraction: number) => void): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", url);
-    xhr.withCredentials = true;
-    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
-    xhr.onload = () => {
-      let body: unknown = null;
-      try {
-        body = JSON.parse(xhr.responseText);
-      } catch {
-        /* not JSON */
-      }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(body as T);
-      else reject(new Error((body as { detail?: string })?.detail ?? `Upload failed (${xhr.status})`));
-    };
-    xhr.onerror = () => reject(new Error("Upload failed: connection lost"));
-    xhr.send(form);
-  });
-}
 
 function builderLink(b: { type: string; value: string }) {
   if (b.type === "tmdb_list") return { label: `TMDb list ${b.value}`, href: `https://www.themoviedb.org/list/${b.value}` };

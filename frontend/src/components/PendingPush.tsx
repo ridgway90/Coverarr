@@ -31,7 +31,7 @@ export default function PendingPush({ mediaItemId, collectionId }: { mediaItemId
         ) : (
           <>
             The chosen poster isn't on <strong>{names.join(", ")}</strong> yet.
-            <span className="text-muted"> ({change.servers.map((s) => s.reason).join(", ")})</span>
+            <span className="text-muted"> ({[...new Set(change.servers.map((s) => s.reason))].join(", ")})</span>
           </>
         )}
         <ErrorNote error={push.error ?? failed} />
