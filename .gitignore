@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+backend/coverarr/static/
+/config/
+*.db
+*.db-wal
+*.db-shm
+.env
+.DS_Store
