@@ -2,6 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Search, SearchX } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
+  AlphabetBar,
   EmptyState,
   PageHeader,
   Pagination,
@@ -29,6 +30,7 @@ export default function LibraryPage() {
   const q = useDebounced(search);
   const filter = params.get("filter") ?? "";
   const page = Number(params.get("page") ?? 1);
+  const letter = params.get("letter") ?? "";
   const servers = useServerMap();
   const { data: libs } = useLibraries();
   const library = libs?.libraries.find((l) => String(l.id) === libraryId);
@@ -45,10 +47,10 @@ export default function LibraryPage() {
   const missingOn = filter.startsWith("missing:") ? Number(filter.split(":")[1]) : undefined;
   const issues = ["poster", "push", "missing", "any"].includes(filter) ? filter : undefined;
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ["items", libraryId, q, filter, page],
+    queryKey: ["items", libraryId, q, filter, letter, page],
     queryFn: () =>
       api.get<Page<ItemSummary>>(
-        `/api/items${qs({ library_id: libraryId, q, missing_on: missingOn, issues, page, page_size: 60 })}`,
+        `/api/items${qs({ library_id: libraryId, q, missing_on: missingOn, issues, letter, page, page_size: 60 })}`,
       ),
     placeholderData: keepPreviousData,
   });
@@ -86,6 +88,7 @@ export default function LibraryPage() {
         </select>
       </div>
 
+      <AlphabetBar value={letter} counts={data?.letters} onChange={(l) => setParam("letter", l)} />
       {!!data?.unscanned && ["any", "poster", "push"].includes(filter) && (
         <p className="mb-4 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-sm">
           {data.unscanned.toLocaleString()} poster{data.unscanned === 1 ? " hasn't" : "s haven't"} been fingerprinted
@@ -97,7 +100,7 @@ export default function LibraryPage() {
         <Spinner />
       ) : !data?.items.length ? (
         <EmptyState icon={<SearchX className="size-8" />} title="Nothing here">
-          {q || filter ? "No titles match these filters." : "Run an import from the dashboard to load this library."}
+          {q || filter || letter ? "No titles match these filters." : "Run an import from the dashboard to load this library."}
         </EmptyState>
       ) : (
         <div className={isFetching ? "opacity-70 transition-opacity" : ""}>

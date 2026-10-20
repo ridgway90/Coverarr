@@ -307,3 +307,53 @@ export function useDebounced<T>(value: T, ms = 300): T {
   }, [value, ms]);
   return v;
 }
+
+export const LETTERS = ["#", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"];
+
+/** The letter a name files under: ignores a leading "The"/"A"/"An"; "#" for anything else. */
+export function initialOf(name: string): string {
+  const trimmed = name.replace(/^(the|an|a)\s+/i, "").trimStart();
+  const first = trimmed.charAt(0).toUpperCase();
+  return first >= "A" && first <= "Z" ? first : "#";
+}
+
+/** A-Z bar; letters with no titles are dimmed. */
+export function AlphabetBar({
+  value,
+  counts,
+  onChange,
+}: {
+  value: string;
+  counts?: Record<string, number>;
+  onChange: (letter: string) => void;
+}) {
+  return (
+    <div className="mb-5 flex flex-wrap gap-1" role="toolbar" aria-label="Filter by first letter">
+      <button
+        className={cx("rounded px-2 py-1 text-xs font-medium", !value ? "bg-accent text-black" : "text-muted hover:bg-panel-2 hover:text-text")}
+        onClick={() => onChange("")}
+      >
+        All
+      </button>
+      {LETTERS.map((letter) => {
+        const n = counts?.[letter] ?? 0;
+        const active = value === letter;
+        return (
+          <button
+            key={letter}
+            title={counts ? `${n.toLocaleString()} title${n === 1 ? "" : "s"}` : undefined}
+            disabled={!!counts && !n && !active}
+            className={cx(
+              "min-w-7 rounded px-1.5 py-1 text-xs font-medium",
+              active ? "bg-accent text-black" : "text-muted hover:bg-panel-2 hover:text-text",
+              "disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent",
+            )}
+            onClick={() => onChange(active ? "" : letter)}
+          >
+            {letter}
+          </button>
+        );
+      })}
+    </div>
+  );
+}

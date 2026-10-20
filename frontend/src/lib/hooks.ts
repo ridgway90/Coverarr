@@ -54,6 +54,7 @@ export const JOB_LABELS: Record<string, string> = {
   collection_remove: "Remove from collection",
   check_definitions: "Check collection lists",
   push_posters: "Push posters",
+  poster_set: "Import poster set",
 };
 
 export function jobLabel(job: Pick<Job, "kind">): string {

@@ -17,8 +17,10 @@ Plex, Jellyfin and Emby, doing only the work that a change actually requires.
   overlays never stack)
 - [x] Import **Kometa's original posters** folder (`config/overlays/<Library> Original Posters`)
   as the base for Plex items that have Kometa overlays
-- [ ] Poster picker from TMDb (and the existing server art); **upload your own**, which pins
+- [x] Poster picker from TMDb (and the existing server art); **upload your own**, which pins
   that item and overrides automatic choices everywhere
+- [x] **Poster sets**: import a zip or folder of posters named by title (e.g. a set downloaded
+  from ThePosterDB) for films, shows, seasons and collections in one go
 - [x] **Pending changes**: choices are kept server-side; the *Changes* page lists every
   server that doesn't show the chosen poster yet and pushes them all, or one at a time
 - [x] Fingerprint-based sync: a server counts as done when its poster's fingerprint matches

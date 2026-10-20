@@ -37,6 +37,28 @@ export const api = {
   del: <T>(path: string) => request<T>("DELETE", path),
 };
 
+/** POST multipart with upload progress (fetch can't report it). */
+export function uploadWithProgress<T>(url: string, form: FormData, onProgress: (fraction: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    xhr.onload = () => {
+      let body: unknown = null;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        /* not JSON */
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body as T);
+      else reject(new Error((body as { detail?: string })?.detail ?? `Upload failed (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Upload failed: connection lost"));
+    xhr.send(form);
+  });
+}
+
 export function qs(params: Record<string, string | number | boolean | null | undefined>): string {
   const search = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -137,6 +159,8 @@ export interface Page<T> {
   items: T[];
   /** Library listings: posters not fingerprinted yet, which poster filters can't see. */
   unscanned?: number;
+  /** Library listings: titles per first letter ("#" for anything else), for the A-Z bar. */
+  letters?: Record<string, number>;
 }
 
 export interface PendingChange {

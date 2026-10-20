@@ -1,8 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { FolderX, Search } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { EmptyState, PageHeader, Poster, PresenceChips, Spinner, Tabs, inputClass, useDebounced } from "../components/ui";
+import {
+  AlphabetBar,
+  EmptyState,
+  PageHeader,
+  Poster,
+  PresenceChips,
+  Spinner,
+  Tabs,
+  initialOf,
+  inputClass,
+  useDebounced,
+} from "../components/ui";
 import { api, qs, type CollectionSummary } from "../lib/api";
 import { useLibraries, useServerMap } from "../lib/hooks";
 
@@ -21,6 +32,7 @@ export default function CollectionsPage() {
   const libraries = libs?.libraries ?? [];
   const libraryId = Number(params.get("library") ?? libraries[0]?.id ?? 0);
   const issuesOnly = params.get("issues") === "1";
+  const letter = params.get("letter") ?? "";
   const library = libraries.find((l) => l.id === libraryId);
   const expected = library?.server_libraries.filter((s) => s.enabled).map((s) => s.server_id) ?? [];
 
@@ -31,6 +43,13 @@ export default function CollectionsPage() {
     enabled: libraryId > 0,
   });
 
+  const letters = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const c of data ?? []) out[initialOf(c.name)] = (out[initialOf(c.name)] ?? 0) + 1;
+    return out;
+  }, [data]);
+  const shown = useMemo(() => (letter ? (data ?? []).filter((c) => initialOf(c.name) === letter) : data), [data, letter]);
+
   const update = (key: string, value: string) => {
     const next = new URLSearchParams(params);
     if (value) next.set(key, value);
@@ -40,7 +59,7 @@ export default function CollectionsPage() {
 
   return (
     <>
-      <PageHeader title="Collections" subtitle={data ? `${data.length} collections` : undefined} />
+      <PageHeader title="Collections" subtitle={data ? `${(shown ?? data).length} collections` : undefined} />
       {libraries.length > 1 && (
         <Tabs
           value={String(libraryId)}
@@ -58,15 +77,16 @@ export default function CollectionsPage() {
           Only with differences
         </label>
       </div>
+      <AlphabetBar value={letter} counts={letters} onChange={(l) => update("letter", l)} />
       {isLoading ? (
         <Spinner />
-      ) : !data?.length ? (
+      ) : !shown?.length ? (
         <EmptyState icon={<FolderX className="size-8" />} title="No collections">
-          {q || issuesOnly ? "Nothing matches these filters." : "Collections show up here after an import."}
+          {q || issuesOnly || letter ? "Nothing matches these filters." : "Collections show up here after an import."}
         </EmptyState>
       ) : (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8">
-          {data.map((c) => {
+          {shown.map((c) => {
             const counts = c.servers.map((s) => s.member_count);
             return (
               <Link key={c.id} to={`/collections/${c.id}`} className="group">

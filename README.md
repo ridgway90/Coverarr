@@ -29,6 +29,15 @@ possible: it tracks what each server already has and only touches what actually 
   - posters that differ → **pick which server has the clean base poster**
   - titles missing on a server
   Anything can be ignored; ignored items stay ignored across imports.
+- **Your own posters.** On any film, show or collection: **Upload poster**, or **Find on
+  TMDb** to pick from TMDb's posters (English and textless first; needs a TMDb API key). The
+  image is kept in the assets folder and becomes the base poster.
+- **Poster sets** (Settings → Poster sets): import a zip or folder of posters named by title,
+  such as a set you've downloaded from ThePosterDB: `Hot Fuzz (2007).jpg`,
+  `Cornetto Collection.jpg`, `Spaced (1999) - Season 1.jpg`. ThePosterDB has no API and its
+  terms forbid automated downloads, so download the set yourself and import the zip.
+- **A–Z bar** on films, TV and collections ("The"/"A"/"An" are skipped, so *The Holiday* is
+  under H).
 - **Changes and Push.** Choosing a base poster (a server's poster or a Kometa original) only
   records the choice. The *Changes* page lists every title, season, episode and collection
   whose chosen poster isn't on every server yet, and why (different poster, still has
@@ -88,7 +97,8 @@ All state lives in `/config`, so back up that folder:
 /config/
   coverarr.db
   assets/                          artwork Coverarr keeps (back this up)
-    movies/Clerks (1994) {tmdb-2292}/poster-kometa.jpg
+    movies/Clerks (1994) {tmdb-2292}/poster-kometa.jpg, poster-upload.jpg, poster-tmdb.jpg,
+                                     poster-set.jpg
     tv/Spaced (1999) {tvdb-75592}/poster-kometa.jpg, season01-kometa.jpg, s01e02-kometa.jpg
     collections/Cornetto Collection/poster-kometa.jpg
     overlays/                      overlay images (coming with overlays)
