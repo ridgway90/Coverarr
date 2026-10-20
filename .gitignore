@@ -12,3 +12,4 @@ backend/coverarr/static/
 *.db-shm
 .env
 .DS_Store
+*.tsbuildinfo

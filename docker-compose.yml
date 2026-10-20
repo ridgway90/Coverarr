@@ -1,0 +1,15 @@
+services:
+  coverarr:
+    image: ghcr.io/ridgway90/coverarr:latest
+    # Or build from source: comment out "image" and uncomment "build".
+    # build: .
+    container_name: coverarr
+    restart: unless-stopped
+    ports:
+      - "2683:2683"
+    volumes:
+      - ./config:/config
+    environment:
+      - TZ=Europe/London
+    # The image runs as uid/gid 1000. Change this if ./config is owned by someone else.
+    user: "1000:1000"

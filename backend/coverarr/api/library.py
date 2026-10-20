@@ -1,0 +1,615 @@
+from __future__ import annotations
+
+from collections import defaultdict
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from coverarr.clients import MediaServerError
+from coverarr.db import get_session
+from coverarr.models import (
+    Collection,
+    Issue,
+    Library,
+    MediaItem,
+    Server,
+    ServerCollection,
+    ServerItem,
+    ServerLibrary,
+)
+
+router = APIRouter(prefix="/api", tags=["library"])
+
+
+# --- libraries --------------------------------------------------------------------------------
+
+
+@router.get("/libraries")
+async def list_libraries(session: AsyncSession = Depends(get_session)):
+    libraries = list(await session.scalars(select(Library).order_by(Library.kind, Library.name)))
+    counts = dict(
+        (
+            await session.execute(
+                select(MediaItem.library_id, func.count(MediaItem.id))
+                .where(MediaItem.kind.in_(("movie", "show")))
+                .group_by(MediaItem.library_id)
+            )
+        ).all()
+    )
+    server_libs = (
+        await session.execute(
+            select(ServerLibrary, Server.name, Server.kind)
+            .join(Server, Server.id == ServerLibrary.server_id)
+            .order_by(Server.id, ServerLibrary.name)
+        )
+    ).all()
+    by_lib: dict[int | None, list[dict[str, Any]]] = defaultdict(list)
+    for sl, server_name, server_kind in server_libs:
+        by_lib[sl.library_id].append(
+            {
+                "id": sl.id,
+                "server_id": sl.server_id,
+                "server_name": server_name,
+                "server_kind": server_kind,
+                "name": sl.name,
+                "kind": sl.kind,
+                "enabled": sl.enabled,
+                "library_id": sl.library_id,
+            }
+        )
+    return {
+        "libraries": [
+            {
+                "id": lib.id,
+                "name": lib.name,
+                "kind": lib.kind,
+                "item_count": counts.get(lib.id, 0),
+                "server_libraries": by_lib.get(lib.id, []),
+            }
+            for lib in libraries
+        ],
+        "unmapped": by_lib.get(None, []),
+    }
+
+
+class LibraryUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+@router.put("/libraries/{library_id}")
+async def rename_library(
+    library_id: int, body: LibraryUpdate, session: AsyncSession = Depends(get_session)
+):
+    lib = await session.get(Library, library_id)
+    if lib is None:
+        raise HTTPException(404, "Library not found")
+    lib.name = body.name.strip()
+    await session.commit()
+    return {"ok": True}
+
+
+class ServerLibraryUpdate(BaseModel):
+    enabled: bool
+    # Map to an existing logical library, or create a new one with ``new_library_name``.
+    library_id: int | None = None
+    new_library_name: str | None = None
+
+
+@router.put("/server-libraries/{sl_id}")
+async def update_server_library(
+    sl_id: int,
+    body: ServerLibraryUpdate,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    sl = await session.get(ServerLibrary, sl_id)
+    if sl is None:
+        raise HTTPException(404, "Server library not found")
+    if body.new_library_name:
+        lib = Library(name=body.new_library_name.strip(), kind=sl.kind)
+        session.add(lib)
+        await session.flush()
+        sl.library_id = lib.id
+    elif body.library_id is not None:
+        lib = await session.get(Library, body.library_id)
+        if lib is None or lib.kind != sl.kind:
+            raise HTTPException(422, "Target library must exist and be the same type")
+        sl.library_id = lib.id
+    else:
+        sl.library_id = None
+    sl.enabled = body.enabled
+    await session.commit()
+    # Drop logical libraries left with no server libraries.
+    empty = await session.scalars(select(Library).where(~Library.server_libraries.any()))
+    for lib in empty:
+        await session.delete(lib)
+    await session.commit()
+    await request.app.state.jobs.enqueue("rematch")
+    return {"ok": True}
+
+
+# --- items ------------------------------------------------------------------------------------
+
+
+def _presence(si: ServerItem) -> dict[str, Any]:
+    return {
+        "server_id": si.server_id,
+        "server_item_id": si.id,
+        "remote_id": si.remote_id,
+        "title": si.title,
+        "has_poster": bool(si.poster_ref),
+        "poster_version": (si.poster_ref or "")[-24:],
+        "kometa_overlay": si.has_kometa_overlay,
+    }
+
+
+def preferred_poster(presence: list[dict[str, Any]], poster_source: str | None) -> dict | None:
+    """Pick which server's poster to show: the chosen source, else a clean one, else any."""
+    with_poster = [p for p in presence if p["has_poster"]]
+    if poster_source and poster_source.startswith("server:"):
+        sid = int(poster_source.split(":", 1)[1])
+        for p in with_poster:
+            if p["server_id"] == sid:
+                return p
+    clean = [p for p in with_poster if not p["kometa_overlay"]]
+    return (clean or with_poster or [None])[0]
+
+
+@router.get("/items")
+async def list_items(
+    library_id: int,
+    q: str | None = None,
+    missing_on: int | None = None,
+    issues: Literal["any", "poster", "missing"] | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(60, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
+):
+    lib = await session.get(Library, library_id)
+    if lib is None:
+        raise HTTPException(404, "Library not found")
+    query = select(MediaItem).where(MediaItem.library_id == library_id, MediaItem.kind == lib.kind)
+    if q:
+        like = f"%{q.strip()}%"
+        query = query.where(or_(MediaItem.title.ilike(like), MediaItem.tmdb_id == q.strip()))
+    if missing_on is not None:
+        query = query.where(~MediaItem.server_items.any(ServerItem.server_id == missing_on))
+    if issues:
+        types = {
+            "any": ("item_missing", "poster_differs"),
+            "poster": ("poster_differs",),
+            "missing": ("item_missing",),
+        }[issues]
+        query = query.where(
+            MediaItem.id.in_(
+                select(Issue.media_item_id).where(Issue.type.in_(types), Issue.status == "open")
+            )
+        )
+    total = await session.scalar(select(func.count()).select_from(query.subquery()))
+    items = list(
+        await session.scalars(
+            query.order_by(func.coalesce(MediaItem.sort_title, MediaItem.title), MediaItem.year)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    )
+    presence = await _presence_for(session, [i.id for i in items])
+    open_issues = await _issue_types_for(session, [i.id for i in items])
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": [
+            {
+                "id": i.id,
+                "kind": i.kind,
+                "title": i.title,
+                "year": i.year,
+                "poster_source": i.poster_source,
+                "servers": presence.get(i.id, []),
+                "poster": preferred_poster(presence.get(i.id, []), i.poster_source),
+                "issues": open_issues.get(i.id, []),
+            }
+            for i in items
+        ],
+    }
+
+
+async def _presence_for(session: AsyncSession, ids: list[int]) -> dict[int, list[dict]]:
+    out: dict[int, list[dict]] = defaultdict(list)
+    if ids:
+        rows = await session.scalars(
+            select(ServerItem)
+            .where(ServerItem.media_item_id.in_(ids))
+            .order_by(ServerItem.server_id)
+        )
+        for si in rows:
+            out[si.media_item_id].append(_presence(si))
+    return out
+
+
+async def _issue_types_for(session: AsyncSession, ids: list[int]) -> dict[int, list[str]]:
+    out: dict[int, list[str]] = defaultdict(list)
+    if ids:
+        rows = await session.execute(
+            select(Issue.media_item_id, Issue.type).where(
+                Issue.media_item_id.in_(ids), Issue.status == "open"
+            )
+        )
+        for mi, t in rows:
+            out[mi].append(t)
+    return out
+
+
+@router.get("/items/{item_id}")
+async def get_item(item_id: int, session: AsyncSession = Depends(get_session)):
+    item = await session.get(MediaItem, item_id)
+    if item is None:
+        raise HTTPException(404, "Item not found")
+    presence = (await _presence_for(session, [item.id])).get(item.id, [])
+    children = []
+    if item.kind == "show":
+        seasons = list(
+            await session.scalars(
+                select(MediaItem)
+                .where(MediaItem.parent_id == item.id)
+                .order_by(MediaItem.season_number)
+            )
+        )
+        season_presence = await _presence_for(session, [s.id for s in seasons])
+        episode_counts = (
+            await session.execute(
+                select(MediaItem.parent_id, ServerItem.server_id, func.count(ServerItem.id))
+                .join(ServerItem, ServerItem.media_item_id == MediaItem.id)
+                .where(MediaItem.parent_id.in_([s.id for s in seasons]))
+                .group_by(MediaItem.parent_id, ServerItem.server_id)
+            )
+        ).all()
+        counts: dict[int, dict[int, int]] = defaultdict(dict)
+        for season_id, server_id, n in episode_counts:
+            counts[season_id][server_id] = n
+        children = [
+            {
+                "id": s.id,
+                "title": s.title,
+                "season_number": s.season_number,
+                "servers": season_presence.get(s.id, []),
+                "episodes": counts.get(s.id, {}),
+            }
+            for s in seasons
+        ]
+    collections = await _collections_containing(session, item.id)
+    issues = list(await session.scalars(select(Issue).where(Issue.media_item_id == item.id)))
+    return {
+        "id": item.id,
+        "library_id": item.library_id,
+        "kind": item.kind,
+        "title": item.title,
+        "year": item.year,
+        "tmdb_id": item.tmdb_id,
+        "tvdb_id": item.tvdb_id,
+        "imdb_id": item.imdb_id,
+        "poster_source": item.poster_source,
+        "servers": presence,
+        "poster": preferred_poster(presence, item.poster_source),
+        "seasons": children,
+        "collections": collections,
+        "issues": [_issue_out(i) for i in issues],
+    }
+
+
+async def _collections_containing(session: AsyncSession, item_id: int) -> list[dict]:
+    remote = {
+        (sid, rid)
+        for sid, rid in (
+            await session.execute(
+                select(ServerItem.server_id, ServerItem.remote_id).where(
+                    ServerItem.media_item_id == item_id
+                )
+            )
+        ).all()
+    }
+    if not remote:
+        return []
+    server_ids = {sid for sid, _ in remote}
+    found: dict[int, str] = {}
+    rows = await session.execute(
+        select(ServerCollection.server_id, ServerCollection.member_remote_ids, Collection)
+        .join(Collection, Collection.id == ServerCollection.collection_id)
+        .where(ServerCollection.server_id.in_(server_ids))
+    )
+    for sid, members, coll in rows:
+        if any((sid, rid) in remote for rid in members or []):
+            found[coll.id] = coll.name
+    return [{"id": cid, "name": name} for cid, name in sorted(found.items(), key=lambda x: x[1])]
+
+
+class PosterSource(BaseModel):
+    poster_source: str | None
+
+
+async def _validate_source(session: AsyncSession, source: str | None) -> None:
+    if source is None:
+        return
+    kind, _, value = source.partition(":")
+    if kind != "server" or not value.isdigit() or not await session.get(Server, int(value)):
+        raise HTTPException(422, "poster_source must be 'server:<id>' for an existing server")
+
+
+@router.put("/items/{item_id}/poster-source")
+async def set_item_poster_source(
+    item_id: int, body: PosterSource, session: AsyncSession = Depends(get_session)
+):
+    item = await session.get(MediaItem, item_id)
+    if item is None:
+        raise HTTPException(404, "Item not found")
+    await _validate_source(session, body.poster_source)
+    item.poster_source = body.poster_source
+    if body.poster_source:
+        await _close_poster_issue(session, media_item_id=item.id)
+    await session.commit()
+    return {"ok": True}
+
+
+async def _close_poster_issue(
+    session: AsyncSession, *, media_item_id: int | None = None, collection_id: int | None = None
+) -> None:
+    query = select(Issue).where(Issue.type == "poster_differs")
+    if media_item_id is not None:
+        query = query.where(Issue.media_item_id == media_item_id)
+    else:
+        query = query.where(Issue.collection_id == collection_id)
+    for issue in await session.scalars(query):
+        await session.delete(issue)
+
+
+# --- collections ------------------------------------------------------------------------------
+
+
+def _sc_out(sc: ServerCollection, member_map: dict[tuple[int, str], int]) -> dict[str, Any]:
+    return {
+        "server_id": sc.server_id,
+        "server_collection_id": sc.id,
+        "remote_id": sc.remote_id,
+        "name": sc.name,
+        "smart": sc.smart,
+        "member_count": len(sc.member_remote_ids or []),
+        "matched_members": [
+            m for rid in sc.member_remote_ids or [] if (m := member_map.get((sc.server_id, rid)))
+        ],
+        "has_poster": bool(sc.poster_ref),
+        "poster_version": (sc.poster_ref or "")[-24:],
+        "kometa_overlay": any(str(t).lower() == "overlay" for t in sc.labels or []),
+    }
+
+
+async def _member_map(session: AsyncSession, scs: list[ServerCollection]) -> dict:
+    wanted = {(sc.server_id, rid) for sc in scs for rid in sc.member_remote_ids or []}
+    if not wanted:
+        return {}
+    server_ids = {sid for sid, _ in wanted}
+    rows = await session.execute(
+        select(ServerItem.server_id, ServerItem.remote_id, ServerItem.media_item_id).where(
+            ServerItem.server_id.in_(server_ids),
+            ServerItem.kind.in_(("movie", "show")),
+            ServerItem.media_item_id.is_not(None),
+        )
+    )
+    return {(sid, rid): mi for sid, rid, mi in rows if (sid, rid) in wanted}
+
+
+@router.get("/collections")
+async def list_collections(
+    library_id: int | None = None,
+    q: str | None = None,
+    issues_only: bool = False,
+    session: AsyncSession = Depends(get_session),
+):
+    query = select(Collection)
+    if library_id is not None:
+        query = query.where(Collection.library_id == library_id)
+    if q:
+        query = query.where(Collection.name.ilike(f"%{q.strip()}%"))
+    if issues_only:
+        query = query.where(
+            Collection.id.in_(select(Issue.collection_id).where(Issue.status == "open"))
+        )
+    colls = list(
+        await session.scalars(query.order_by(func.coalesce(Collection.sort_title, Collection.name)))
+    )
+    ids = [c.id for c in colls]
+    scs = (
+        list(
+            await session.scalars(
+                select(ServerCollection)
+                .where(ServerCollection.collection_id.in_(ids))
+                .order_by(ServerCollection.server_id)
+            )
+        )
+        if ids
+        else []
+    )
+    member_map = await _member_map(session, scs)
+    by_coll: dict[int, list[dict]] = defaultdict(list)
+    for sc in scs:
+        out = _sc_out(sc, member_map)
+        out["matched_members"] = len(out["matched_members"])
+        by_coll[sc.collection_id].append(out)
+    issue_rows = (
+        (
+            await session.execute(
+                select(Issue.collection_id, Issue.type).where(
+                    Issue.collection_id.in_(ids), Issue.status == "open"
+                )
+            )
+        ).all()
+        if ids
+        else []
+    )
+    issue_map: dict[int, list[str]] = defaultdict(list)
+    for cid, t in issue_rows:
+        issue_map[cid].append(t)
+    return [
+        {
+            "id": c.id,
+            "library_id": c.library_id,
+            "name": c.name,
+            "sort_title": c.sort_title,
+            "poster_source": c.poster_source,
+            "servers": by_coll.get(c.id, []),
+            "poster": preferred_poster(by_coll.get(c.id, []), c.poster_source),
+            "issues": issue_map.get(c.id, []),
+        }
+        for c in colls
+    ]
+
+
+@router.get("/collections/{collection_id}")
+async def get_collection(collection_id: int, session: AsyncSession = Depends(get_session)):
+    coll = await session.get(Collection, collection_id)
+    if coll is None:
+        raise HTTPException(404, "Collection not found")
+    scs = list(
+        await session.scalars(
+            select(ServerCollection)
+            .where(ServerCollection.collection_id == coll.id)
+            .order_by(ServerCollection.server_id)
+        )
+    )
+    member_map = await _member_map(session, scs)
+    servers = [_sc_out(sc, member_map) for sc in scs]
+    all_members = sorted({m for s in servers for m in s["matched_members"]})
+    items = {
+        i.id: i
+        for i in await session.scalars(select(MediaItem).where(MediaItem.id.in_(all_members)))
+    }
+    presence = await _presence_for(session, all_members)
+    members = sorted(
+        (
+            {
+                "id": mid,
+                "title": items[mid].title,
+                "year": items[mid].year,
+                "in_collection_on": [
+                    s["server_id"] for s in servers if mid in s["matched_members"]
+                ],
+                "servers": presence.get(mid, []),
+                "poster": preferred_poster(presence.get(mid, []), items[mid].poster_source),
+            }
+            for mid in all_members
+            if mid in items
+        ),
+        key=lambda m: (m["year"] or 0, m["title"]),
+    )
+    for s in servers:
+        s["matched_members"] = len(s["matched_members"])
+    issues = list(await session.scalars(select(Issue).where(Issue.collection_id == coll.id)))
+    return {
+        "id": coll.id,
+        "library_id": coll.library_id,
+        "name": coll.name,
+        "sort_title": coll.sort_title,
+        "summary": coll.summary,
+        "poster_source": coll.poster_source,
+        "servers": servers,
+        "poster": preferred_poster(servers, coll.poster_source),
+        "members": members,
+        "issues": [_issue_out(i) for i in issues],
+    }
+
+
+@router.put("/collections/{collection_id}/poster-source")
+async def set_collection_poster_source(
+    collection_id: int, body: PosterSource, session: AsyncSession = Depends(get_session)
+):
+    coll = await session.get(Collection, collection_id)
+    if coll is None:
+        raise HTTPException(404, "Collection not found")
+    await _validate_source(session, body.poster_source)
+    coll.poster_source = body.poster_source
+    if body.poster_source:
+        await _close_poster_issue(session, collection_id=coll.id)
+    await session.commit()
+    return {"ok": True}
+
+
+class CollectionSync(BaseModel):
+    create: bool = True
+    add_members: bool = True
+    server_ids: list[int] | None = None
+
+
+@router.post("/collections/{collection_id}/sync")
+async def sync_collection(
+    collection_id: int,
+    body: CollectionSync,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    if await session.get(Collection, collection_id) is None:
+        raise HTTPException(404, "Collection not found")
+    job = await request.app.state.jobs.enqueue(
+        "collection_sync", {"collection_ids": [collection_id], **body.model_dump()}
+    )
+    return {"job_id": job.id}
+
+
+# --- images -----------------------------------------------------------------------------------
+
+
+async def _thumb(request: Request, server: Server, remote_id: str, ref: str, width: int):
+    try:
+        path = await request.app.state.thumbs.get(server, remote_id, ref, width)
+    except MediaServerError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(502, f"Unreadable image: {exc}") from exc
+    return FileResponse(
+        path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=604800"}
+    )
+
+
+@router.get("/images/item/{server_item_id}")
+async def item_image(
+    server_item_id: int,
+    request: Request,
+    w: int = Query(300, ge=50, le=1000),
+    session: AsyncSession = Depends(get_session),
+):
+    si = await session.get(ServerItem, server_item_id)
+    if si is None or not si.poster_ref:
+        raise HTTPException(404, "No poster")
+    server = await session.get(Server, si.server_id)
+    return await _thumb(request, server, si.remote_id, si.poster_ref, w)
+
+
+@router.get("/images/collection/{server_collection_id}")
+async def collection_image(
+    server_collection_id: int,
+    request: Request,
+    w: int = Query(300, ge=50, le=1000),
+    session: AsyncSession = Depends(get_session),
+):
+    sc = await session.get(ServerCollection, server_collection_id)
+    if sc is None or not sc.poster_ref:
+        raise HTTPException(404, "No poster")
+    server = await session.get(Server, sc.server_id)
+    return await _thumb(request, server, sc.remote_id, sc.poster_ref, w)
+
+
+def _issue_out(i: Issue) -> dict[str, Any]:
+    return {
+        "id": i.id,
+        "type": i.type,
+        "status": i.status,
+        "title": i.title,
+        "library_id": i.library_id,
+        "media_item_id": i.media_item_id,
+        "collection_id": i.collection_id,
+        "details": i.details,
+        "updated_at": i.updated_at,
+    }
