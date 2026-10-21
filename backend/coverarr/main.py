@@ -13,6 +13,7 @@ from coverarr import __version__
 from coverarr.api import (
     artwork,
     auth,
+    automation,
     changes,
     housekeeping,
     jobs,
@@ -26,7 +27,7 @@ from coverarr.api import (
 from coverarr.config import Settings, get_settings
 from coverarr.db import dispose_engine, init_engine, run_migrations, session_factory
 from coverarr.security import current_user
-from coverarr.services import cpu
+from coverarr.services import arr, cpu
 from coverarr.services.actions import run_collection_rename, run_collection_sync, run_fix_match
 from coverarr.services.artwork import run_poster_set, run_tmdb_reset
 from coverarr.services.assets import relocate_artwork
@@ -44,6 +45,7 @@ from coverarr.services.refresh import (
     run_refresh_collection,
     run_refresh_item,
 )
+from coverarr.services.schedule import Scheduler, run_safety_scan
 from coverarr.services.settings_store import ensure_secret
 
 
@@ -80,13 +82,22 @@ def create_app(config: Settings | None = None) -> FastAPI:
         runner.register("tmdb_reset", run_tmdb_reset)
         runner.register("store_bases", run_store_bases)
         runner.register("tidy_assets", run_tidy_assets)
+        runner.register("arr_event", arr.run_arr_event)
+        runner.register("safety_scan", run_safety_scan)
         await runner.start()
         app.state.jobs = runner
+        arr.queue = arr.ArrQueue(runner)
+        scheduler = Scheduler(runner, str(config.config_dir))
+        scheduler.start()
+        app.state.scheduler = scheduler
         app.state.client_pool = ClientPool()
         app.state.thumbs = ThumbnailCache(config.cache_dir, app.state.client_pool)
         try:
             yield
         finally:
+            await scheduler.stop()
+            arr.queue.close()
+            arr.queue = None
             await runner.stop()
             cpu.shutdown()
             await app.state.client_pool.close()
@@ -95,6 +106,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Coverarr", version=__version__, lifespan=lifespan)
     app.state.config = config
     app.include_router(auth.router)
+    app.include_router(automation.public)
     protected = [Depends(current_user)]
     for module in (
         servers,
@@ -107,6 +119,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
         artwork,
         overlays,
         housekeeping,
+        automation,
     ):
         app.include_router(module.router, dependencies=protected)
 

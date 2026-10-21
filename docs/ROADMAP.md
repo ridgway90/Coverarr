@@ -42,8 +42,8 @@ Plex, Jellyfin and Emby, doing only the work that a change actually requires.
 
 ## Phase 4: Automation and custom collections
 
-- Sonarr/Radarr webhooks (import, upgrade, rename, delete) → process only that item and push
-- Weekly safety-net full scan that compares and pushes only real differences
+- [x] Sonarr/Radarr webhooks (import, upgrade, rename, delete) → process only that item and push
+- [x] Weekly safety-net full scan that compares and pushes only real differences
 - Custom collections defined in the UI, sourced from **TMDb list ids**, **Trakt list URLs**
   (several merged), and later IMDb Top 250 / trending; sort title, summary, label,
   release-date ordering; sync mode (add-only or exact)

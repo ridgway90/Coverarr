@@ -4,10 +4,11 @@ One place to manage posters, overlays and collections for **Plex, Jellyfin and E
 all three look the same. It's a Kometa alternative built around doing as little work as
 possible: it tracks what each server already has and only touches what actually changed.
 
-> **Status: Phase 3 (overlays).** Coverarr connects to your servers, imports and matches
+> **Status: Phase 4 (automation).** Coverarr connects to your servers, imports and matches
 > everything, shows where the servers disagree, creates missing collections and fills in
 > missing members, and pushes the base posters you choose, with overlays drawn on, to every
-> server. *arr webhooks come next; see [docs/ROADMAP.md](docs/ROADMAP.md).
+> server. Radarr/Sonarr webhooks keep new and upgraded titles up to date, and a weekly scan
+> catches anything missed. Custom collections come next; see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## What Phase 1 does
 
@@ -46,6 +47,22 @@ possible: it tracks what each server already has and only touches what actually 
 - **Every core is used** for the heavy image work in every task: fingerprinting during scans and
   refreshes, Kometa and poster-set imports, storing bases, the TMDb reset and overlay renders all
   share one pool of worker processes (every core but one).
+- **Radarr and Sonarr webhooks** (Settings → Automation). Add Coverarr's webhook URL in
+  Radarr/Sonarr (*Settings → Connect → Webhook*, with On Import, On Upgrade, On Rename and the
+  delete events). For each file event Coverarr:
+  - asks every server to scan that title's folder (optional, if your servers don't already),
+  - waits, then finds the title on each server by id, or among the most recently added, and
+    checks that the server lists the new files; servers still scanning are tried again after 1,
+    2, 5 and 15 minutes,
+  - refreshes just that title (with its seasons and episodes), gives new titles and seasons
+    TMDb's main poster as their base, fingerprints the posters and pushes that title, with
+    overlays redrawn if, say, an upgrade made it 4K or HDR.
+
+  A season pack's webhooks (one per episode) are combined into one update.
+- **Weekly safety-net scan** (Settings → Automation): a full import, fingerprints, then a push
+  of only the posters that really differ from their base. Pick the day and hour (the
+  container's local time; set `TZ`). A scan missed while Coverarr was down runs when it's back;
+  *Run the scan now* runs one straight away.
 - **Cancel** any queued or running task from *Activity* (or next to its progress bar). Work it
   already finished, such as posters already pushed, is kept.
 - **A–Z bar** on films, TV and collections ("The"/"A"/"An" are skipped, so *The Holiday* is

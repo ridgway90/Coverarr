@@ -464,6 +464,7 @@ async def get_item(item_id: int, session: AsyncSession = Depends(get_session)):
         "tvdb_id": item.tvdb_id,
         "imdb_id": item.imdb_id,
         "poster_source": item.poster_source,
+        "facts": item.facts or {},
         "servers": presence,
         "artwork": artwork,
         "poster": preferred_poster(presence, item.poster_source, artwork),
