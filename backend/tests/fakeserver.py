@@ -832,6 +832,10 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
         coll = srv.collections.get(item_id) or _missing()
         if body.get("Id") != item_id:
             raise HTTPException(400)  # the real API wants the whole item back
+        lockable = {"Cast", "Genres", "ProductionLocations", "Studios", "Tags", "Name"}
+        lockable |= {"Overview", "Runtime", "OfficialRating"}
+        if set(body.get("LockedFields") or []) - lockable:
+            raise HTTPException(400, "LockedFields: not a MetadataField")
         coll.name = body["Name"]
         coll.summary = body.get("Overview")
         coll.order = body.get("DisplayOrder")
