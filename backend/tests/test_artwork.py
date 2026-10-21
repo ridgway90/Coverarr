@@ -193,7 +193,7 @@ async def test_poster_set(app, authed, fake_servers):
         "The World's End (2013)",
         "Shaun of the Dead (2004)",
         "Cornetto Collection",
-        "Spaced - Season 1",
+        "Spaced: Season 1",
         "Black Books (2000)",
     } <= changes
     elf_detail = (await client.get(f"/api/items/{elf['id']}")).json()
@@ -262,3 +262,42 @@ async def test_previous_next(app, authed, fake_servers):
         await client.get(f"/api/collections/{colls[0]['id']}/neighbours", params={"letter": "P"})
     ).json()
     assert nav["position"] is None
+
+
+async def test_season_posters(app, authed, fake_servers):
+    client = authed
+    ids = await add_servers(client)
+    await run_job(app, client, "import")
+    _, tv = await _libs(client)
+    spaced = await _item(client, tv["id"], "Spaced")
+    show = (await client.get(f"/api/items/{spaced['id']}")).json()
+    season1 = next(s for s in show["seasons"] if s["season_number"] == 1)
+    assert season1["poster"]["has_poster"] and season1["poster_source"] is None
+
+    detail = (await client.get(f"/api/items/{season1['id']}")).json()
+    assert detail["kind"] == "season" and detail["title"] == "Spaced: Season 1"
+    assert detail["parent"] == {"id": spaced["id"], "title": "Spaced", "year": 1999}
+    assert len(detail["servers"]) == 3
+
+    resp = await client.post(
+        f"/api/items/{season1['id']}/artwork",
+        files={"file": ("s1.png", poster_png("my season one"), "image/png")},
+    )
+    assert resp.status_code == 200, resp.text
+    show = (await client.get(f"/api/items/{spaced['id']}")).json()
+    season1 = next(s for s in show["seasons"] if s["season_number"] == 1)
+    assert season1["poster_source"] == f"artwork:{resp.json()['artwork_id']}"
+    assert season1["poster"]["artwork_id"] == resp.json()["artwork_id"]
+
+    [change] = (await client.get("/api/changes")).json()["items"]
+    assert change["title"] == "Spaced: Season 1" and change["kind"] == "season"
+    assert change["top_id"] == spaced["id"] and len(change["servers"]) == 3
+    job = (await client.post("/api/changes/push", json={"media_item_ids": [season1["id"]]})).json()
+    await app.state.jobs.wait_idle()
+    result = (await client.get(f"/api/jobs/{job['job_id']}")).json()["result"]
+    assert result["uploaded"] == 3
+    plex = fake_servers["plex"]
+    plex_show = plex.by_title("Spaced")
+    plex_season = next(i for i in plex.items.values() if i.parent == plex_show.id and i.index == 1)
+    assert plex_season.uploaded is not None
+    assert ids  # all three servers took it

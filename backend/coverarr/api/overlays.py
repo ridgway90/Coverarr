@@ -178,7 +178,7 @@ async def samples(
                 else parent
             )
             if level == "season":
-                label = f"{show.title if show else '?'} - Season {m.season_number}"
+                label = f"{show.title if show else '?'}: Season {m.season_number}"
             else:
                 season_number = m.season_number
                 if season_number is None and parent is not None:

@@ -427,16 +427,29 @@ async def get_item(item_id: int, session: AsyncSession = Depends(get_session)):
         counts: dict[int, dict[int, int]] = defaultdict(dict)
         for season_id, server_id, n in episode_counts:
             counts[season_id][server_id] = n
+        season_art = await _artworks_for(session, item_ids=[s.id for s in seasons])
         children = [
             {
                 "id": s.id,
                 "title": s.title,
                 "season_number": s.season_number,
+                "poster_source": s.poster_source,
                 "servers": season_presence.get(s.id, []),
+                "poster": preferred_poster(
+                    season_presence.get(s.id, []), s.poster_source, season_art.get(s.id)
+                ),
                 "episodes": counts.get(s.id, {}),
             }
             for s in seasons
         ]
+    parent = None
+    title = item.title
+    if item.kind == "season" and item.parent_id:
+        show = await session.get(MediaItem, item.parent_id)
+        if show is not None:
+            parent = {"id": show.id, "title": show.title, "year": show.year}
+            name = "Specials" if item.season_number == 0 else f"Season {item.season_number}"
+            title = f"{show.title}: {name}"
     collections = await _collections_containing(session, item.id)
     artwork = (await _artworks_for(session, item_ids=[item.id])).get(item.id, [])
     issues = list(await session.scalars(select(Issue).where(Issue.media_item_id == item.id)))
@@ -444,8 +457,9 @@ async def get_item(item_id: int, session: AsyncSession = Depends(get_session)):
         "id": item.id,
         "library_id": item.library_id,
         "kind": item.kind,
-        "title": item.title,
+        "title": title,
         "year": item.year,
+        "parent": parent,
         "tmdb_id": item.tmdb_id,
         "tvdb_id": item.tvdb_id,
         "imdb_id": item.imdb_id,

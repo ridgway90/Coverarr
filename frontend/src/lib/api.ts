@@ -251,12 +251,16 @@ export interface Season {
   id: number;
   title: string;
   season_number: number;
+  poster_source: string | null;
   servers: Presence[];
+  poster: PosterRef | null;
   episodes: Record<string, number>;
 }
 
 export interface ItemDetail extends Omit<ItemSummary, "issues"> {
   library_id: number;
+  /** For a season: its show. */
+  parent: { id: number; title: string; year: number | null } | null;
   tmdb_id: string | null;
   tvdb_id: string | null;
   imdb_id: string | null;
