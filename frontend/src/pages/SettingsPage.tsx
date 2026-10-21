@@ -16,13 +16,14 @@ import {
   inputClass,
   selectClass,
 } from "../components/ui";
+import AutomationSettings from "../components/AutomationSettings";
 import KometaImport from "../components/KometaImport";
 import PosterSetImport from "../components/PosterSetImport";
 import TmdbReset from "../components/TmdbReset";
 import { api, type Server, type ServerKind, type ServerLibrary, type TestResult } from "../lib/api";
 import { useLibraries, useServers } from "../lib/hooks";
 
-type Tab = "servers" | "libraries" | "kometa" | "sets" | "reset" | "general";
+type Tab = "servers" | "libraries" | "automation" | "kometa" | "sets" | "reset" | "general";
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>("servers");
@@ -35,6 +36,7 @@ export default function SettingsPage() {
         tabs={[
           { id: "servers", label: "Media servers" },
           { id: "libraries", label: "Library mapping" },
+          { id: "automation", label: "Automation" },
           { id: "kometa", label: "Import from Kometa" },
           { id: "sets", label: "Poster sets" },
           { id: "reset", label: "Reset posters" },
@@ -43,6 +45,7 @@ export default function SettingsPage() {
       />
       {tab === "servers" && <ServersTab />}
       {tab === "libraries" && <LibrariesTab />}
+      {tab === "automation" && <AutomationSettings />}
       {tab === "kometa" && <KometaImport />}
       {tab === "sets" && <PosterSetImport />}
       {tab === "reset" && <TmdbReset />}

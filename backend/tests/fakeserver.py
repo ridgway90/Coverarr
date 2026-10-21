@@ -148,6 +148,10 @@ class FakeServer:
         self._ids = itertools.count(1000)
         self.requests = 0
         self.maintenance: list[str] = []
+        self.locations: dict[str, str] = {}  # library id -> folder
+        # Files on disk the server hasn't scanned yet; a scan of their folder adds them.
+        self.unscanned: list[Item] = []
+        self.scans: list[str] = []
 
     def new_id(self) -> str:
         n = next(self._ids)
@@ -161,6 +165,15 @@ class FakeServer:
     def add(self, item: Item) -> Item:
         self.items[item.id] = item
         return item
+
+    def scan(self, path: str) -> None:
+        self.scans.append(path)
+        found = [i for i in self.unscanned if (i.file or "").startswith(path.rstrip("/") + "/")]
+        # Seasons have no file of their own: they appear with their episodes.
+        found += [i for i in self.unscanned if i.id in {f.parent for f in found} and i not in found]
+        for item in found:
+            self.unscanned.remove(item)
+            self.add(item)
 
     def by_title(self, title: str) -> Item:
         return next(
@@ -214,6 +227,8 @@ def populate(
     mount = MOUNTS[server.kind]
     movies_lib = server.add_library("Films" if server.kind == "plex" else "Movies", "movie")
     tv_lib = server.add_library("TV Programmes" if server.kind == "plex" else "Shows", "show")
+    server.locations[movies_lib] = f"{mount}/Movies"
+    server.locations[tv_lib] = f"{mount}/TV"
     for title, year, tmdb, imdb in MOVIES:
         if title in skip_movies:
             continue
@@ -417,7 +432,13 @@ def plex_router(srv: FakeServer) -> APIRouter:
         return {
             "MediaContainer": {
                 "Directory": [
-                    {"key": lid, "title": name, "type": kind} for lid, name, kind in srv.libraries
+                    {
+                        "key": lid,
+                        "title": name,
+                        "type": kind,
+                        "Location": [{"path": srv.locations[lid]}] if lid in srv.locations else [],
+                    }
+                    for lid, name, kind in srv.libraries
                 ]
             }
         }
@@ -445,7 +466,15 @@ def plex_router(srv: FakeServer) -> APIRouter:
             if param in request.query_params:
                 want = request.query_params[param] == "1"
                 rows = [i for i in rows if bool(i.video.get(flag)) == want]
+        if request.query_params.get("sort") == "addedAt:desc":
+            rows.reverse()
         return page(request, [meta(i) for i in rows])
+
+    @r.get("/library/sections/{lib}/refresh")
+    async def refresh(lib: str, request: Request):
+        auth(request)
+        srv.scan(request.query_params.get("path") or srv.locations.get(lib, "/"))
+        return {}
 
     @r.get("/library/sections/{lib}/collections")
     async def collections(lib: str, request: Request):
@@ -493,6 +522,17 @@ def plex_router(srv: FakeServer) -> APIRouter:
         item = srv.items.get(rk) or _missing()
         out = meta(item)
         out["Label"] = [{"tag": t} for t in item.labels]
+        # Details carry the video stream, where Plex reports HDR and Dolby Vision.
+        if out.get("Media") and (item.video.get("hdr") or item.video.get("dv")):
+            stream: dict[str, Any] = {"streamType": 1}
+            if item.video.get("hdr"):
+                stream["colorTrc"] = "smpte2084"
+            if item.video.get("dv"):
+                stream["DOVIPresent"] = True
+            out["Media"][0].setdefault("Part", [{}])
+            if not out["Media"][0]["Part"]:
+                out["Media"][0]["Part"].append({})
+            out["Media"][0]["Part"][0]["Stream"] = [stream]
         return {"MediaContainer": {"Metadata": [out]}}
 
     @r.get("/library/metadata/{rk}/children")
@@ -693,9 +733,21 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
         auth(request)
         types = {"movie": "movies", "show": "tvshows"}
         return [
-            {"Name": name, "ItemId": lid, "CollectionType": types[kind]}
+            {
+                "Name": name,
+                "ItemId": lid,
+                "CollectionType": types[kind],
+                "Locations": [srv.locations[lid]] if lid in srv.locations else [],
+            }
             for lid, name, kind in srv.libraries
         ]
+
+    @r.post("/Library/Media/Updated")
+    async def media_updated(request: Request):
+        auth(request)
+        for update in (await request.json()).get("Updates") or []:
+            srv.scan(update["Path"])
+        return Response(status_code=204)
 
     @r.get("/Users/{uid}/Items")
     async def items(uid: str, request: Request):
@@ -723,6 +775,8 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
                 for i in srv.items.values()
                 if i.library == parent and (not kinds or i.kind in kinds)
             ]
+        if qp.get("SortBy") == "DateCreated" and qp.get("SortOrder") == "Descending":
+            rows.reverse()
         start, limit = int(qp.get("StartIndex", 0)), int(qp.get("Limit", 100))
         return {"Items": rows[start : start + limit], "TotalRecordCount": len(rows)}
 

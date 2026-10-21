@@ -95,7 +95,14 @@ class JellyfinClient(MediaServerClient):
             kind = LIBRARY_KINDS.get(str(f.get("CollectionType", "")).lower())
             lib_id = f.get("ItemId") or f.get("Id")
             if kind and lib_id:
-                libs.append(RemoteLibrary(id=str(lib_id), name=f.get("Name", ""), kind=kind))
+                libs.append(
+                    RemoteLibrary(
+                        id=str(lib_id),
+                        name=f.get("Name", ""),
+                        kind=kind,
+                        locations=[str(p) for p in f.get("Locations") or []],
+                    )
+                )
         return libs
 
     async def _paged(self, params: dict[str, Any]) -> AsyncIterator[list[dict[str, Any]]]:
@@ -275,6 +282,33 @@ class JellyfinClient(MediaServerClient):
         async for rows in self._paged({"ParentId": collection_id, "Fields": "ProviderIds"}):
             coll.member_ids.extend(str(r["Id"]) for r in rows)
         return coll
+
+    async def recent_items(
+        self, library: RemoteLibrary, kind: ItemKind, limit: int = 50
+    ) -> list[RemoteItem]:
+        uid = await self.user_id()
+        data = await self._json(
+            "GET",
+            f"/Users/{uid}/Items",
+            params={
+                "ParentId": library.id,
+                "Recursive": "true",
+                "IncludeItemTypes": ITEM_TYPES[kind],
+                "Fields": FIELDS,
+                "EnableImageTypes": "Primary",
+                "SortBy": "DateCreated",
+                "SortOrder": "Descending",
+                "Limit": limit,
+            },
+        )
+        return [self._to_item(r, kind) for r in data.get("Items") or []]
+
+    async def scan_folder(self, library: RemoteLibrary, path: str) -> None:
+        await self._request(
+            "POST",
+            "/Library/Media/Updated",
+            json={"Updates": [{"Path": path, "UpdateType": "Created"}]},
+        )
 
     async def show_children(self, show_id: str) -> list[RemoteItem]:
         kinds = {"Season": "season", "Episode": "episode"}

@@ -62,6 +62,15 @@ def _media_facts(
         for flag, ids in flags.items():
             if rating_key in ids:
                 facts[flag] = True
+        # A single item's details list its streams; the library listing doesn't.
+        for part in media.get("Part") or []:
+            for stream in part.get("Stream") or []:
+                if to_int(stream.get("streamType")) != 1:
+                    continue
+                if stream.get("DOVIPresent") in (True, 1, "1"):
+                    facts["dv"] = True
+                if stream.get("colorTrc") in ("smpte2084", "arib-std-b67"):
+                    facts["hdr"] = True
         if meta.get("editionTitle"):
             facts["edition"] = meta["editionTitle"]
     elif kind == "show":
@@ -143,7 +152,14 @@ class PlexClient(MediaServerClient):
         for d in container.get("Directory") or []:
             if d.get("type") in ("movie", "show"):
                 libs.append(
-                    RemoteLibrary(id=str(d["key"]), name=d.get("title", ""), kind=d["type"])
+                    RemoteLibrary(
+                        id=str(d["key"]),
+                        name=d.get("title", ""),
+                        kind=d["type"],
+                        locations=[
+                            loc["path"] for loc in d.get("Location") or [] if loc.get("path")
+                        ],
+                    )
                 )
         return libs
 
@@ -405,6 +421,24 @@ class PlexClient(MediaServerClient):
         async for page in self._paged(f"/library/collections/{collection_id}/children"):
             coll.member_ids.extend(str(r["ratingKey"]) for r in page)
         return coll
+
+    async def recent_items(
+        self, library: RemoteLibrary, kind: ItemKind, limit: int = 50
+    ) -> list[RemoteItem]:
+        container = await self._container(
+            f"/library/sections/{library.id}/all",
+            {
+                "type": PLEX_TYPES[kind],
+                "includeGuids": 1,
+                "sort": "addedAt:desc",
+                "X-Plex-Container-Start": 0,
+                "X-Plex-Container-Size": limit,
+            },
+        )
+        return [self._to_item(r, kind, set()) for r in container.get("Metadata") or []]
+
+    async def scan_folder(self, library: RemoteLibrary, path: str) -> None:
+        await self._request("GET", f"/library/sections/{library.id}/refresh", params={"path": path})
 
     async def show_children(self, show_id: str) -> list[RemoteItem]:
         out: list[RemoteItem] = []

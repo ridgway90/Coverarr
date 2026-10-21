@@ -34,6 +34,8 @@ class RemoteLibrary:
     id: str
     name: str
     kind: LibraryKind
+    # Folders the library reads from, as the server sees them.
+    locations: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -233,3 +235,13 @@ class MediaServerClient(ABC):
     async def remove_from_collection(
         self, library_remote_id: str | None, collection_id: str, member_ids: list[str]
     ) -> None: ...
+
+    @abstractmethod
+    async def recent_items(
+        self, library: RemoteLibrary, kind: ItemKind, limit: int = 50
+    ) -> list[RemoteItem]:
+        """The most recently added movies or shows of a library, newest first."""
+
+    @abstractmethod
+    async def scan_folder(self, library: RemoteLibrary, path: str) -> None:
+        """Ask the server to scan one folder of a library (e.g. a newly downloaded film)."""

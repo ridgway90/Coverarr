@@ -58,12 +58,17 @@ export const JOB_LABELS: Record<string, string> = {
   store_bases: "Store base posters",
   tidy_assets: "Tidy stored posters",
   tmdb_reset: "Reset posters from TMDb",
+  arr_event: "Radarr/Sonarr update",
+  safety_scan: "Weekly safety-net scan",
 };
 
 const FINISHED: Job["status"][] = ["succeeded", "failed", "cancelled"];
 
-export function jobLabel(job: Pick<Job, "kind">): string {
-  return JOB_LABELS[job.kind] ?? job.kind;
+export function jobLabel(job: Pick<Job, "kind"> & { params?: Job["params"] }): string {
+  const label = JOB_LABELS[job.kind] ?? job.kind;
+  const event = job.params?.event as { title?: string; year?: number } | undefined;
+  if (job.kind === "arr_event" && event?.title) return `${label}: ${event.title}${event.year ? ` (${event.year})` : ""}`;
+  return label;
 }
 
 /**
