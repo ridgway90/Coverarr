@@ -44,10 +44,13 @@ Plex, Jellyfin and Emby, doing only the work that a change actually requires.
 
 - [x] Sonarr/Radarr webhooks (import, upgrade, rename, delete) → process only that item and push
 - [x] Weekly safety-net full scan that compares and pushes only real differences
-- Custom collections defined in the UI, sourced from **TMDb list ids**, **Trakt list URLs**
-  (several merged), and later IMDb Top 250 / trending; sort title, summary, label,
-  release-date ordering; sync mode (add-only or exact)
-- Collection posters with overrides; create everywhere automatically
+- [x] Custom collections defined in the UI, sourced from **TMDb lists/collections/ids**,
+  **Trakt list URLs** (several merged) and TMDb/Trakt charts (trending, popular, top rated…);
+  sort title, summary, release/alphabetical/list ordering; sync mode (add-only or exact);
+  daily sync
+- [x] Collection posters with overrides (TMDb's poster for new TMDb collections); created
+  everywhere automatically
+- Kometa labels on collections; IMDb charts (no API)
 
 ## Later / nice to have
 

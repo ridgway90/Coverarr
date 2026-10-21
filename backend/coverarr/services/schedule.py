@@ -17,6 +17,7 @@ from coverarr.services.jobs import JobContext, JobRunner
 log = logging.getLogger(__name__)
 
 LAST_RUN_KEY = "weekly_scan_last"
+COLLECTIONS_LAST_KEY = "collections_sync_last"
 
 
 class StageContext(JobContext):
@@ -38,12 +39,17 @@ class StageContext(JobContext):
 
 async def run_safety_scan(ctx: JobContext) -> dict[str, Any]:
     from coverarr.services.changes import run_push_posters
+    from coverarr.services.definitions import run_sync_definitions
     from coverarr.services.importer import run_import
     from coverarr.services.posters import run_poster_scan
 
     result: dict[str, Any] = {}
-    await ctx.log("Weekly safety-net scan: import, fingerprint, push differences")
-    result["import"] = await run_import(StageContext(ctx, 0.0, 0.6, {}))
+    await ctx.log("Weekly safety-net scan: import, sync collections, fingerprint, push differences")
+    result["import"] = await run_import(StageContext(ctx, 0.0, 0.5, {}))
+    # The push at the end covers the collections' posters too.
+    result["collections"] = await run_sync_definitions(
+        StageContext(ctx, 0.5, 0.6, {"no_push": True})
+    )
     result["fingerprints"] = await run_poster_scan(StageContext(ctx, 0.6, 0.75, {}))
     push = await run_push_posters(
         StageContext(ctx, 0.75, 1.0, {"config_dir": ctx.params["config_dir"]})
@@ -64,6 +70,11 @@ def due_since(now: datetime, weekday: int, hour: int) -> datetime:
 
 def next_run(now: datetime, weekday: int, hour: int) -> datetime:
     return due_since(now, weekday, hour) + timedelta(days=7)
+
+
+def daily_since(now: datetime, hour: int) -> datetime:
+    slot = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    return slot if slot <= now else slot - timedelta(days=1)
 
 
 class Scheduler:
@@ -96,26 +107,41 @@ class Scheduler:
                 log.exception("Scheduler tick failed")
             await asyncio.sleep(self.interval)
 
-    async def tick(self, now: datetime | None = None) -> bool:
-        """Queue the weekly scan if it's due; True if it was queued."""
+    async def tick(self, now: datetime | None = None) -> list[str]:
+        """Queue whatever is due; returns the job kinds queued."""
         from coverarr.services.arr import automation_settings
-        from coverarr.services.settings_store import get_setting, set_setting
 
         now = now or datetime.now()
+        queued: list[str] = []
         async with self.runner.sessionmaker() as session:
-            weekly = (await automation_settings(session))["weekly_scan"]
-            if not weekly["enabled"]:
-                return False
-            slot = due_since(now, int(weekly["weekday"]), int(weekly["hour"]))
-            last = await get_setting(session, LAST_RUN_KEY)
-            if last is None:
-                # Just switched on: count from now rather than scanning straight away.
-                await set_setting(session, LAST_RUN_KEY, now.isoformat(timespec="seconds"))
-                await session.commit()
-                return False
-            if datetime.fromisoformat(last) >= slot:
-                return False
-            await set_setting(session, LAST_RUN_KEY, now.isoformat(timespec="seconds"))
+            settings = await automation_settings(session)
+            weekly, daily = settings["weekly_scan"], settings["collections_sync"]
+            if weekly["enabled"] and await _due(
+                session,
+                LAST_RUN_KEY,
+                due_since(now, int(weekly["weekday"]), int(weekly["hour"])),
+                now,
+            ):
+                queued.append("safety_scan")
+            # The weekly scan syncs the collections itself.
+            elif daily["enabled"] and await _due(
+                session, COLLECTIONS_LAST_KEY, daily_since(now, int(daily["hour"])), now
+            ):
+                queued.append("sync_definitions")
             await session.commit()
-        await self.runner.enqueue("safety_scan", {"config_dir": self.config_dir})
-        return True
+        for kind in queued:
+            params = {"config_dir": self.config_dir} if kind == "safety_scan" else {}
+            await self.runner.enqueue(kind, params)
+        return queued
+
+
+async def _due(session: Any, key: str, slot: datetime, now: datetime) -> bool:
+    """Whether the run recorded under ``key`` is older than ``slot``; records ``now`` if so.
+    The first check only starts the clock, so switching something on doesn't run it at once."""
+    from coverarr.services.settings_store import get_setting, set_setting
+
+    last = await get_setting(session, key)
+    if last is not None and datetime.fromisoformat(last) >= slot:
+        return False
+    await set_setting(session, key, now.isoformat(timespec="seconds"))
+    return last is not None

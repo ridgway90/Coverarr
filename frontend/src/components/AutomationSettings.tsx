@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, Copy, RefreshCw, Webhook } from "lucide-react";
+import { CalendarClock, Copy, ListOrdered, RefreshCw, Webhook } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
@@ -13,6 +13,7 @@ interface Automation {
   new_base: "tmdb" | "none";
   auto_push: boolean;
   weekly_scan: { enabled: boolean; weekday: number; hour: number };
+  collections_sync: { enabled: boolean; hour: number };
   webhook_path: string;
   weekly_last_run: string | null;
   weekly_next_run: string | null;
@@ -43,6 +44,7 @@ export default function AutomationSettings() {
   const url = `${window.location.origin}${data.webhook_path}`;
   const set = (patch: Partial<Automation>) => setForm({ ...form, ...patch });
   const setWeekly = (patch: Partial<Automation["weekly_scan"]>) => set({ weekly_scan: { ...form.weekly_scan, ...patch } });
+  const setDaily = (patch: Partial<Automation["collections_sync"]>) => set({ collections_sync: { ...form.collections_sync, ...patch } });
   const dirty = JSON.stringify(form) !== JSON.stringify(data);
   const copy = async () => {
     try {
@@ -172,6 +174,31 @@ export default function AutomationSettings() {
             </span>
           )}
           {scan.job?.status === "failed" && <span className="text-sm text-danger">{scan.job.error}</span>}
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-5">
+        <h2 className="flex items-center gap-2 font-semibold">
+          <ListOrdered className="size-4" /> List collections
+        </h2>
+        <p className="text-sm text-muted">
+          Every day, sync the{" "}
+          <Link to="/lists" className="text-accent hover:underline">
+            list collections
+          </Link>{" "}
+          that are switched on, so charts and lists stay current. The weekly scan syncs them too.
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={form.collections_sync.enabled} onChange={(e) => setDaily({ enabled: e.target.checked })} /> Sync daily at
+          </label>
+          <select className={selectClass} value={form.collections_sync.hour} disabled={!form.collections_sync.enabled} onChange={(e) => setDaily({ hour: Number(e.target.value) })}>
+            {Array.from({ length: 24 }, (_, h) => (
+              <option key={h} value={h}>
+                {String(h).padStart(2, "0")}:00
+              </option>
+            ))}
+          </select>
         </div>
       </Card>
 

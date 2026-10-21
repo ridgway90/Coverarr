@@ -4,15 +4,14 @@ import asyncio
 import shutil
 import uuid
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.db import get_session
-from coverarr.models import Collection, CollectionDefinition, Library, ServerCollection
+from coverarr.models import Library
 from coverarr.services.definitions import save_definitions
 from coverarr.services.kometa_yaml import (
     KometaYamlError,
@@ -21,7 +20,6 @@ from coverarr.services.kometa_yaml import (
     parse_collection_file,
     parse_config,
 )
-from coverarr.services.matching import normalize_collection_name
 from coverarr.services.settings_store import set_setting
 
 router = APIRouter(prefix="/api", tags=["kometa"])
@@ -136,81 +134,3 @@ async def _import_keys(session: AsyncSession, config) -> list[str]:
             await set_setting(session, key, value)
             imported.append(key)
     return imported
-
-
-def _definition_out(d: CollectionDefinition, colls: dict[tuple[int | None, str], Any]) -> dict:
-    coll = colls.get((d.library_id, normalize_collection_name(d.name)))
-    return {
-        "id": d.id,
-        "name": d.name,
-        "library_id": d.library_id,
-        "source": d.source,
-        "source_file": d.source_file,
-        "builders": d.builders,
-        "options": d.options,
-        "unsupported": d.unsupported,
-        "check_result": d.check_result,
-        "checked_at": d.checked_at,
-        "collection": coll,
-    }
-
-
-@router.get("/definitions")
-async def list_definitions(session: AsyncSession = Depends(get_session)):
-    definitions = list(
-        await session.scalars(select(CollectionDefinition).order_by(CollectionDefinition.name))
-    )
-    colls: dict[tuple[int | None, str], Any] = {}
-    rows = await session.execute(
-        select(Collection.id, Collection.name, Collection.library_id, Collection.normalized_name)
-    )
-    servers: dict[int, list[int]] = {}
-    for cid, sid in (
-        await session.execute(select(ServerCollection.collection_id, ServerCollection.server_id))
-    ).all():
-        if cid is not None:
-            servers.setdefault(cid, []).append(sid)
-    for cid, name, lib_id, norm in rows:
-        colls[(lib_id, norm)] = {"id": cid, "name": name, "servers": sorted(servers.get(cid, []))}
-    return [_definition_out(d, colls) for d in definitions]
-
-
-class DefinitionUpdate(BaseModel):
-    library_id: int | None
-
-
-@router.put("/definitions/{definition_id}")
-async def update_definition(
-    definition_id: int, body: DefinitionUpdate, session: AsyncSession = Depends(get_session)
-):
-    definition = await session.get(CollectionDefinition, definition_id)
-    if definition is None:
-        raise HTTPException(404, "Definition not found")
-    if body.library_id is not None and await session.get(Library, body.library_id) is None:
-        raise HTTPException(422, "Unknown library")
-    definition.library_id = body.library_id
-    definition.check_result = None
-    await session.commit()
-    return {"ok": True}
-
-
-@router.delete("/definitions/{definition_id}")
-async def delete_definition(definition_id: int, session: AsyncSession = Depends(get_session)):
-    definition = await session.get(CollectionDefinition, definition_id)
-    if definition is None:
-        raise HTTPException(404, "Definition not found")
-    await session.delete(definition)
-    await session.commit()
-    return {"ok": True}
-
-
-class CheckRequest(BaseModel):
-    ids: list[int] | None = None
-
-
-@router.post("/definitions/check")
-async def check_definitions(body: CheckRequest, request: Request):
-    job = await request.app.state.jobs.enqueue(
-        "check_definitions", {"ids": body.ids} if body.ids else {}
-    )
-    return {"job_id": job.id}

@@ -136,6 +136,9 @@ class Coll:
     smart: bool = False
     art_version: int = 1
     uploaded: bytes | None = None
+    sort_title: str | None = None
+    summary: str | None = None
+    order: str | None = None  # Plex collectionSort, or Jellyfin DisplayOrder
 
 
 class FakeServer:
@@ -615,7 +618,27 @@ def plex_router(srv: FakeServer) -> APIRouter:
         coll = srv.collections.get(qp["id"]) or _missing()
         if qp.get("type") != "18" or coll.library != lib:
             raise HTTPException(400)
-        coll.name = qp["title.value"]
+        coll.name = qp.get("title.value", coll.name)
+        coll.sort_title = qp.get("titleSort.value", coll.sort_title)
+        coll.summary = qp.get("summary.value", coll.summary)
+        return {}
+
+    @r.put("/library/metadata/{cid}/prefs")
+    async def prefs(cid: str, request: Request):
+        auth(request)
+        coll = srv.collections.get(cid) or _missing()
+        coll.order = request.query_params["collectionSort"]
+        return {}
+
+    @r.put("/library/collections/{cid}/items/{rk}/move")
+    async def move(cid: str, rk: str, request: Request):
+        auth(request)
+        coll = srv.collections.get(cid) or _missing()
+        if rk not in coll.members:
+            raise HTTPException(404)
+        coll.members.remove(rk)
+        after = request.query_params.get("after")
+        coll.members.insert(coll.members.index(after) + 1 if after else 0, rk)
         return {}
 
     @r.get("/library/metadata/{rk}/thumb/{ts}")
@@ -711,7 +734,9 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
             "Id": c.id,
             "Name": c.name,
             "Type": "BoxSet",
-            "SortName": c.name.lower(),
+            "SortName": c.sort_title or c.name.lower(),
+            "Overview": c.summary,
+            "DisplayOrder": c.order,
             "ImageTags": {"Primary": tag(c.art_version, c.id)},
         }
 
@@ -808,6 +833,10 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
         if body.get("Id") != item_id:
             raise HTTPException(400)  # the real API wants the whole item back
         coll.name = body["Name"]
+        coll.summary = body.get("Overview")
+        coll.order = body.get("DisplayOrder")
+        if body.get("ForcedSortName"):
+            coll.sort_title = body["ForcedSortName"]
         return Response(status_code=204)
 
     @r.post("/Items/RemoteSearch/{search_type}")

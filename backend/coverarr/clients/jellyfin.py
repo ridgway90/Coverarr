@@ -9,6 +9,7 @@ from typing import Any
 
 from coverarr import __version__
 from coverarr.clients.base import (
+    CollectionOrder,
     ItemKind,
     MatchTarget,
     MediaServerClient,
@@ -282,6 +283,35 @@ class JellyfinClient(MediaServerClient):
         async for rows in self._paged({"ParentId": collection_id, "Fields": "ProviderIds"}):
             coll.member_ids.extend(str(r["Id"]) for r in rows)
         return coll
+
+    async def update_collection(
+        self,
+        library_remote_id: str | None,
+        collection_id: str,
+        *,
+        sort_title: str | None = None,
+        summary: str | None = None,
+        order: CollectionOrder | None = None,
+        member_order: list[str] | None = None,
+    ) -> list[str]:
+        uid = await self.user_id()
+        item = await self._json("GET", f"/Users/{uid}/Items/{collection_id}")
+        locked = set(item.get("LockedFields") or [])
+        if sort_title is not None:
+            item["SortName"] = item["ForcedSortName"] = sort_title
+            locked.add("SortName")
+        if summary is not None:
+            item["Overview"] = summary
+            locked.add("Overview")
+        notes = []
+        if order in ("release", "alpha"):
+            item["DisplayOrder"] = "PremiereDate" if order == "release" else "SortName"
+        elif order == "custom":
+            notes.append(f"{self.kind} collections can't keep a custom order; sorted by name")
+            item["DisplayOrder"] = "SortName"
+        item["LockedFields"] = sorted(locked)
+        await self._request("POST", f"/Items/{collection_id}", json=item)
+        return notes
 
     async def recent_items(
         self, library: RemoteLibrary, kind: ItemKind, limit: int = 50

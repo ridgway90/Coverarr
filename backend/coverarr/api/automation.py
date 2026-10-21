@@ -15,7 +15,7 @@ from coverarr.db import get_session
 from coverarr.models import Job
 from coverarr.services import arr
 from coverarr.services.arr import AUTOMATION_KEY, automation_settings, parse_payload
-from coverarr.services.schedule import LAST_RUN_KEY, next_run
+from coverarr.services.schedule import COLLECTIONS_LAST_KEY, LAST_RUN_KEY, next_run
 from coverarr.services.settings_store import ensure_secret, set_setting
 
 TOKEN_KEY = "webhook_token"
@@ -53,12 +53,18 @@ class WeeklyScan(BaseModel):
     hour: int = Field(4, ge=0, le=23)
 
 
+class CollectionsSync(BaseModel):
+    enabled: bool = True
+    hour: int = Field(3, ge=0, le=23)
+
+
 class Automation(BaseModel):
     scan_servers: bool = True
     wait_seconds: int = Field(30, ge=0, le=3600)
     new_base: Literal["tmdb", "none"] = "tmdb"
     auto_push: bool = True
     weekly_scan: WeeklyScan = WeeklyScan()
+    collections_sync: CollectionsSync = CollectionsSync()
 
 
 async def _out(session: AsyncSession) -> dict[str, Any]:
@@ -90,11 +96,14 @@ async def read_automation(session: AsyncSession = Depends(get_session)):
 
 @router.put("")
 async def update_automation(body: Automation, session: AsyncSession = Depends(get_session)):
-    before = (await automation_settings(session))["weekly_scan"]
+    before = await automation_settings(session)
     await set_setting(session, AUTOMATION_KEY, body.model_dump())
-    if body.weekly_scan.enabled and not before["enabled"]:
-        # Count from now, so switching it on doesn't start a scan straight away.
-        await set_setting(session, LAST_RUN_KEY, datetime.now().isoformat(timespec="seconds"))
+    # Count from now, so switching something on doesn't start it straight away.
+    now = datetime.now().isoformat(timespec="seconds")
+    if body.weekly_scan.enabled and not before["weekly_scan"]["enabled"]:
+        await set_setting(session, LAST_RUN_KEY, now)
+    if body.collections_sync.enabled and not before["collections_sync"]["enabled"]:
+        await set_setting(session, COLLECTIONS_LAST_KEY, now)
     await session.commit()
     return await _out(session)
 

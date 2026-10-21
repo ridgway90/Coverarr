@@ -356,5 +356,9 @@ class CollectionDefinition(Base):
     unsupported: Mapped[list[str]] = mapped_column(JSON, default=list)
     check_result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Kept in sync on every server (on its own schedule and in the weekly scan).
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    sync_result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)

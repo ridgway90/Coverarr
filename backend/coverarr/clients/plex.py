@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import quote
 
 from coverarr.clients.base import (
+    CollectionOrder,
     ItemKind,
     MatchTarget,
     MediaServerClient,
@@ -23,6 +24,7 @@ from coverarr.clients.base import (
 from coverarr.services.mediainfo import normalize_resolution
 
 PLEX_TYPES: dict[str, int] = {"movie": 1, "show": 2, "season": 3, "episode": 4}
+PLEX_COLLECTION_SORT: dict[str, int] = {"release": 0, "alpha": 1, "custom": 2}
 EDIT_TYPES: dict[str, int] = {**PLEX_TYPES, "collection": 18}
 
 log = logging.getLogger(__name__)
@@ -421,6 +423,50 @@ class PlexClient(MediaServerClient):
         async for page in self._paged(f"/library/collections/{collection_id}/children"):
             coll.member_ids.extend(str(r["ratingKey"]) for r in page)
         return coll
+
+    async def update_collection(
+        self,
+        library_remote_id: str | None,
+        collection_id: str,
+        *,
+        sort_title: str | None = None,
+        summary: str | None = None,
+        order: CollectionOrder | None = None,
+        member_order: list[str] | None = None,
+    ) -> list[str]:
+        fields: dict[str, Any] = {}
+        if sort_title is not None:
+            fields.update({"titleSort.value": sort_title, "titleSort.locked": 1})
+        if summary is not None:
+            fields.update({"summary.value": summary, "summary.locked": 1})
+        if fields:
+            if not library_remote_id:
+                raise MediaServerError("plex: collection has no library section")
+            await self._request(
+                "PUT",
+                f"/library/sections/{library_remote_id}/all",
+                params={"type": 18, "id": collection_id, **fields},
+            )
+        if order is not None:
+            await self._request(
+                "PUT",
+                f"/library/metadata/{collection_id}/prefs",
+                params={"collectionSort": PLEX_COLLECTION_SORT[order]},
+            )
+        if order == "custom" and member_order:
+            current = (await self.get_collection(library_remote_id, collection_id)).member_ids
+            wanted = [m for m in member_order if m in set(current)]
+            if [m for m in current if m in set(wanted)] != wanted:
+                previous: str | None = None
+                for rating_key in wanted:
+                    params = {"after": previous} if previous else {}
+                    await self._request(
+                        "PUT",
+                        f"/library/collections/{collection_id}/items/{rating_key}/move",
+                        params=params,
+                    )
+                    previous = rating_key
+        return []
 
     async def recent_items(
         self, library: RemoteLibrary, kind: ItemKind, limit: int = 50
