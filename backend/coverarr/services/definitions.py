@@ -420,6 +420,17 @@ async def _tmdb_collection_poster(
     return True
 
 
+async def _forget_rejected_token(ctx: JobContext, session: AsyncSession, lists: ListClient) -> None:
+    """Trakt refused the saved sign-in: drop it, so later syncs don't trip over it."""
+    if lists.trakt_token_rejected:
+        await trakt.disconnect(session)
+        await ctx.log(
+            "Trakt refused the saved sign-in (expired, or made before Trakt's sign-in change), "
+            "so it was removed. Public lists work without it; to read private lists, use "
+            "Connect Trakt in Settings → General."
+        )
+
+
 async def run_sync_definitions(ctx: JobContext) -> dict[str, Any]:
     """Sync the given definitions, or every one that's switched on."""
     from coverarr.services.arr import automation_settings
@@ -470,6 +481,7 @@ async def run_sync_definitions(ctx: JobContext) -> dict[str, Any]:
                 )
                 for note in result["notes"]:
                     await ctx.log(f"{definition.name}: {note}")
+        await _forget_rejected_token(ctx, session, lists)
         await ctx.progress(0.95, "Checking for differences")
         await refresh_issues(session)
         await session.commit()
@@ -507,5 +519,6 @@ async def run_check_definitions(ctx: JobContext) -> dict[str, Any]:
                     f"library"
                     + (f"; errors: {'; '.join(result['errors'])}" if result["errors"] else "")
                 )
+        await _forget_rejected_token(ctx, session, lists)
     await ctx.progress(1.0, "Checked")
     return dict(summary)

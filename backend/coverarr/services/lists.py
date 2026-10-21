@@ -66,6 +66,10 @@ class ListError(Exception):
     pass
 
 
+class Unauthorized(ListError):
+    """401/403: the key, client ID or sign-in token was refused."""
+
+
 @dataclass(slots=True)
 class ListEntry:
     kind: str  # movie | show
@@ -124,6 +128,8 @@ class ListClient:
         self.tmdb_key = tmdb_key
         self.trakt_client_id = trakt_client_id
         self.trakt_token = trakt_token
+        # Set when Trakt refused the sign-in token (lists are then read without it).
+        self.trakt_token_rejected = False
         self._http = httpx.AsyncClient(
             timeout=30, headers={"User-Agent": USER_AGENT}, transport=transport
         )
@@ -151,8 +157,8 @@ class ListClient:
             except ValueError:
                 wait = 0.0
             await asyncio.sleep(min(max(wait, 1.0 * 2**attempt), 30.0))
-        if resp.status_code == 401:
-            raise ListError(f"{url}: API key rejected")
+        if resp.status_code in (401, 403):
+            raise Unauthorized(f"{url}: API key rejected")
         if resp.status_code == 404:
             raise ListError(f"{url}: not found (private or deleted?)")
         if resp.status_code >= 400:
@@ -250,6 +256,23 @@ class ListClient:
 
     # --- Trakt ------------------------------------------------------------------------------
 
+    async def _trakt_get(self, url: str, params: dict[str, Any]) -> httpx.Response:
+        try:
+            return await self._get(url, headers=self._trakt_headers(), params=params)
+        except Unauthorized:
+            if not self.trakt_token:
+                raise ListError(
+                    "Trakt refused the client ID: check it in Settings → General (it's the "
+                    "Client ID of your app at trakt.tv/oauth/applications)"
+                ) from None
+        # An expired or revoked sign-in (e.g. one imported from Kometa) makes Trakt refuse even
+        # public lists: read without it, and let the caller drop it.
+        self.trakt_token, self.trakt_token_rejected = None, True
+        try:
+            return await self._get(url, headers=self._trakt_headers(), params=params)
+        except Unauthorized:
+            raise ListError("Trakt refused the client ID: check it in Settings → General") from None
+
     def _trakt_headers(self) -> dict[str, str]:
         if not self.trakt_client_id:
             raise ListError("Add a Trakt client ID in Settings → General")
@@ -271,11 +294,8 @@ class ListClient:
         )
 
     async def trakt_chart(self, path: str, kind: str, limit: int) -> list[ListEntry]:
-        headers = self._trakt_headers()
         key = "show" if kind == "show" else "movie"
-        resp = await self._get(
-            f"{TRAKT_API}/{key}s/{path}", headers=headers, params={"limit": limit}
-        )
+        resp = await self._trakt_get(f"{TRAKT_API}/{key}s/{path}", {"limit": limit})
         entries = []
         for row in resp.json()[:limit]:
             # Most charts wrap each title ({"watchers": 5, "movie": {...}}); popular doesn't.
@@ -284,16 +304,21 @@ class ListClient:
         return entries
 
     async def trakt_list(self, url: str) -> list[ListEntry]:
-        headers = self._trakt_headers()
         path = trakt_list_path(url)
         entries: list[ListEntry] = []
         page, pages = 1, 1
         while page <= min(pages, MAX_PAGES):
-            resp = await self._get(
-                f"{TRAKT_API}/{path}/items/movie,show",
-                headers=headers,
-                params={"page": page, "limit": 100},
-            )
+            try:
+                resp = await self._trakt_get(
+                    f"{TRAKT_API}/{path}/items/movie,show", {"page": page, "limit": 100}
+                )
+            except ListError as exc:
+                if "not found" in str(exc) and not self.trakt_token:
+                    raise ListError(
+                        f"{url}: not found, or private (connect Trakt in Settings → General "
+                        "to read your private lists)"
+                    ) from None
+                raise
             pages = int(resp.headers.get("X-Pagination-Page-Count") or 1)
             for row in resp.json():
                 kind = row.get("type")
