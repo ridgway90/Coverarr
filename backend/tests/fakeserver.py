@@ -147,6 +147,7 @@ class FakeServer:
         self.collections: dict[str, Coll] = {}
         self._ids = itertools.count(1000)
         self.requests = 0
+        self.maintenance: list[str] = []
 
     def new_id(self) -> str:
         n = next(self._ids)
@@ -534,6 +535,24 @@ def plex_router(srv: FakeServer) -> APIRouter:
         item = srv.items.get(rk) or _missing()
         key = request.query_params["guid"].rsplit("/", 1)[1]
         apply_catalog(item, key)
+        return {}
+
+    @r.put("/library/clean/bundles")
+    async def clean_bundles(request: Request):
+        auth(request)
+        srv.maintenance.append("clean_bundles")
+        return {}
+
+    @r.put("/library/optimize")
+    async def optimize(request: Request):
+        auth(request)
+        srv.maintenance.append("optimize")
+        return {}
+
+    @r.put("/library/sections/{lib}/emptyTrash")
+    async def empty_trash(lib: str, request: Request):
+        auth(request)
+        srv.maintenance.append(f"empty_trash:{lib}")
         return {}
 
     @r.post("/library/metadata/{rk}/posters")

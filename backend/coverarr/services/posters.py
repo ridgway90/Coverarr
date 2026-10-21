@@ -99,14 +99,13 @@ async def _pending(session: AsyncSession, server_id: int) -> list[tuple[str, int
     items = await session.execute(
         select(ServerItem.id, ServerItem.remote_id, ServerItem.poster_ref).where(
             ServerItem.server_id == server_id,
-            # Seasons and episodes only when a base poster was chosen for them (e.g. Kometa
-            # originals): that's when we need to know whether each server already shows it.
+            # Episodes only when a base poster was chosen for them (e.g. Kometa originals):
+            # that's when we need to know whether each server already shows it.
             or_(
-                ServerItem.kind.in_(("movie", "show")),
+                ServerItem.kind.in_(("movie", "show", "season")),
                 ServerItem.media_item_id.in_(
                     select(MediaItem.id).where(
-                        MediaItem.poster_source.is_not(None),
-                        MediaItem.kind.in_(("season", "episode")),
+                        MediaItem.poster_source.is_not(None), MediaItem.kind == "episode"
                     )
                 ),
             ),
