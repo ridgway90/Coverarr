@@ -41,6 +41,8 @@ AUTOMATION_DEFAULTS: dict[str, Any] = {
     "auto_push": True,
     # Weekly safety-net scan (services/schedule.py). weekday: 0 = Monday.
     "weekly_scan": {"enabled": False, "weekday": 6, "hour": 4},
+    # Daily sync of the collections that are switched on (services/definitions.py).
+    "collections_sync": {"enabled": True, "hour": 3},
 }
 # Further looks for servers that haven't picked the files up yet (seconds after the last).
 RETRY_DELAYS = (60, 120, 300, 900)
@@ -50,10 +52,8 @@ RECENT_LIMIT = 50
 async def automation_settings(session: AsyncSession) -> dict[str, Any]:
     stored = await get_setting(session, AUTOMATION_KEY) or {}
     merged = {**AUTOMATION_DEFAULTS, **stored}
-    merged["weekly_scan"] = {
-        **AUTOMATION_DEFAULTS["weekly_scan"],
-        **(stored.get("weekly_scan") or {}),
-    }
+    for key in ("weekly_scan", "collections_sync"):
+        merged[key] = {**AUTOMATION_DEFAULTS[key], **(stored.get(key) or {})}
     return merged
 
 

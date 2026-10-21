@@ -9,9 +9,8 @@ from typing import Any
 
 import yaml
 
-from coverarr.services.lists import ListError, tmdb_id_from, trakt_list_path
+from coverarr.services.lists import BUILDERS, ListError, normalize_builder
 
-BUILDERS = ("tmdb_list", "tmdb_collection", "trakt_list")
 OPTIONS = ("sync_mode", "collection_order", "sort_title", "label", "summary")
 
 
@@ -89,14 +88,9 @@ def parse_collection_file(text: str, filename: str) -> list[ParsedCollection]:
             if key in BUILDERS:
                 for value in _values(raw):
                     try:
-                        if key == "trakt_list":
-                            trakt_list_path(value)
-                        else:
-                            value = tmdb_id_from(value, key.split("_", 1)[1])
+                        coll.builders.append(normalize_builder(key, value))
                     except ListError as exc:
                         coll.warnings.append(str(exc))
-                        continue
-                    coll.builders.append({"type": key, "value": value})
             elif key in OPTIONS:
                 coll.options[key] = (
                     [str(v) for v in raw] if key == "label" and isinstance(raw, list) else raw
@@ -105,7 +99,7 @@ def parse_collection_file(text: str, filename: str) -> list[ParsedCollection]:
                 coll.unsupported.append(str(key))
         if not coll.builders:
             coll.warnings.append(
-                "No supported list source (tmdb_list, tmdb_collection, trakt_list)"
+                "No supported list source (TMDb/Trakt lists, collections or charts)"
             )
         parsed.append(coll)
     return parsed

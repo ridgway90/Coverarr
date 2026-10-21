@@ -11,6 +11,7 @@ import CollectionsPage from "./pages/CollectionsPage";
 import DashboardPage from "./pages/DashboardPage";
 import ItemDetailPage from "./pages/ItemDetailPage";
 import HousekeepingPage from "./pages/HousekeepingPage";
+import ListCollectionsPage from "./pages/ListCollectionsPage";
 import JobsPage from "./pages/JobsPage";
 import OverlaysPage from "./pages/OverlaysPage";
 import LibraryPage from "./pages/LibraryPage";
@@ -39,6 +40,7 @@ export default function App() {
         <Route path="library/:libraryId" element={<LibraryPage />} />
         <Route path="items/:itemId" element={<ItemDetailPage />} />
         <Route path="collections" element={<CollectionsPage />} />
+        <Route path="lists" element={<ListCollectionsPage />} />
         <Route path="collections/:collectionId" element={<CollectionDetailPage />} />
         <Route path="review" element={<ReviewPage />} />
         <Route path="changes" element={<ChangesPage />} />

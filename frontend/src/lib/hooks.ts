@@ -53,6 +53,7 @@ export const JOB_LABELS: Record<string, string> = {
   refresh_collection: "Refresh collection",
   collection_remove: "Remove from collection",
   check_definitions: "Check collection lists",
+  sync_definitions: "Sync list collections",
   push_posters: "Push posters",
   poster_set: "Import poster set",
   store_bases: "Store base posters",

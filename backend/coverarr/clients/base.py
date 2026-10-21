@@ -9,6 +9,8 @@ from typing import Any, Literal
 import httpx
 
 LibraryKind = Literal["movie", "show"]
+# Collection order: by release date, alphabetical, or the order of the source list.
+CollectionOrder = Literal["release", "alpha", "custom"]
 ItemKind = Literal["movie", "show", "season", "episode"]
 
 USER_AGENT = "Coverarr/0.1"
@@ -235,6 +237,20 @@ class MediaServerClient(ABC):
     async def remove_from_collection(
         self, library_remote_id: str | None, collection_id: str, member_ids: list[str]
     ) -> None: ...
+
+    @abstractmethod
+    async def update_collection(
+        self,
+        library_remote_id: str | None,
+        collection_id: str,
+        *,
+        sort_title: str | None = None,
+        summary: str | None = None,
+        order: CollectionOrder | None = None,
+        member_order: list[str] | None = None,
+    ) -> list[str]:
+        """Set a collection's sort title, summary and order (``member_order`` for "custom").
+        Returns notes about anything the server can't do."""
 
     @abstractmethod
     async def recent_items(

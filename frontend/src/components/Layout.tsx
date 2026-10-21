@@ -1,20 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  Film,
-  FolderKanban,
-  Layers,
-  LayoutDashboard,
-  ListChecks,
-  Upload,
-  Loader2,
-  LogOut,
-  Menu,
-  Settings,
-  Sparkles,
-  Tv,
-  Workflow,
-  X,
-} from "lucide-react";
+import { Film, FolderKanban, Layers, LayoutDashboard, ListChecks, ListOrdered, Loader2, LogOut, Menu, Settings, Sparkles, Tv, Upload, Workflow, X } from "lucide-react";
 import { useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { api } from "../lib/api";
@@ -77,6 +62,7 @@ export default function Layout({ username }: { username: string }) {
         />
       ))}
       <NavItem to="/collections" icon={<FolderKanban className="size-4" />} label="Collections" />
+      <NavItem to="/lists" icon={<ListOrdered className="size-4" />} label="List collections" />
       <div className="mt-3 px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted/70">Manage</div>
       <NavItem to="/review" icon={<ListChecks className="size-4" />} label="Review" badge={openIssues} />
       <NavItem to="/changes" icon={<Upload className="size-4" />} label="Changes" badge={pending} />

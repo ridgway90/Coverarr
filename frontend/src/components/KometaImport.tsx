@@ -1,30 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, ExternalLink, FileUp, FolderOpen, ListChecks, Trash2, Upload } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { CheckCircle2, FileUp, FolderOpen, Upload } from "lucide-react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, uploadWithProgress, type Job } from "../lib/api";
 import { useLibraries, useServers } from "../lib/hooks";
-import { Button, Card, ErrorNote, Field, PresenceChips, ServerChip, cx, formatDate, inputClass, selectClass } from "./ui";
-
-interface Definition {
-  id: number;
-  name: string;
-  library_id: number | null;
-  source_file: string | null;
-  builders: { type: string; value: string }[];
-  options: Record<string, unknown>;
-  unsupported: string[];
-  checked_at: string | null;
-  check_result: {
-    total: number;
-    in_library: number;
-    missing_count: number;
-    missing: { title: string; year: number | null }[];
-    errors: string[];
-    collection: { id: number; name: string; servers: Record<string, { in_collection: number; extra: number }> } | null;
-  } | null;
-  collection: { id: number; name: string; servers: number[] } | null;
-}
+import { Button, Card, ErrorNote, Field, formatDate, inputClass, selectClass } from "./ui";
 
 interface YamlResult {
   saved: number;
@@ -41,13 +21,6 @@ const KEY_LABELS: Record<string, string> = {
   trakt_access_token: "Trakt access token",
   trakt_refresh_token: "Trakt refresh token",
 };
-
-function builderLink(b: { type: string; value: string }) {
-  if (b.type === "tmdb_list") return { label: `TMDb list ${b.value}`, href: `https://www.themoviedb.org/list/${b.value}` };
-  if (b.type === "tmdb_collection") return { label: `TMDb collection ${b.value}`, href: `https://www.themoviedb.org/collection/${b.value}` };
-  const slug = b.value.replace(/^https?:\/\/(www\.)?trakt\.tv\//, "");
-  return { label: `Trakt ${slug}`, href: b.value };
-}
 
 export default function KometaImport() {
   return (
@@ -215,25 +188,10 @@ function OriginalsResult({ job }: { job: Job }) {
 function YamlSection() {
   const qc = useQueryClient();
   const { data: libs } = useLibraries();
-  const { data: servers } = useServers();
-  const serverMap = new Map((servers ?? []).map((s) => [s.id, s]));
   const [libraryId, setLibraryId] = useState("");
   const [importKeys, setImportKeys] = useState(true);
   const [result, setResult] = useState<YamlResult | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const definitions = useQuery({ queryKey: ["definitions"], queryFn: () => api.get<Definition[]>("/api/definitions") });
-  const checking = useQuery({
-    queryKey: ["jobs", "check_definitions"],
-    queryFn: () => api.get<Job[]>("/api/jobs?limit=30"),
-    select: (all) => all.find((j) => j.kind === "check_definitions" && ["queued", "running"].includes(j.status)),
-    refetchInterval: (q) => (q.state.data?.some((j) => j.kind === "check_definitions" && ["queued", "running"].includes(j.status)) ? 1500 : false),
-  });
-  // Reload the results when a running check finishes.
-  const wasChecking = useRef(false);
-  useEffect(() => {
-    if (wasChecking.current && !checking.data) qc.invalidateQueries({ queryKey: ["definitions"] });
-    wasChecking.current = Boolean(checking.data);
-  }, [checking.data, qc]);
 
   const upload = useMutation({
     mutationFn: async (files: FileList) => {
@@ -253,19 +211,6 @@ function YamlSection() {
       if (fileRef.current) fileRef.current.value = "";
     },
   });
-  const check = useMutation({
-    mutationFn: (ids?: number[]) => api.post("/api/definitions/check", { ids }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }),
-  });
-  const remove = useMutation({
-    mutationFn: (id: number) => api.del(`/api/definitions/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["definitions"] }),
-  });
-  const move = useMutation({
-    mutationFn: ({ id, library_id }: { id: number; library_id: number | null }) => api.put(`/api/definitions/${id}`, { library_id }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["definitions"] }),
-  });
-  const libName = (id: number | null) => libs?.libraries.find((l) => l.id === id)?.name;
 
   return (
     <Card className="p-5">
@@ -273,8 +218,7 @@ function YamlSection() {
       <p className="mt-1 text-sm text-muted">
         Upload your Kometa collection YAML files (e.g. <code>comfort-j.yml</code>, <code>christmas.yml</code>). Include{" "}
         <code>config.yml</code> to place each file in the right library and bring over your TMDb/Trakt keys. TMDb lists, TMDb
-        collections and Trakt lists are understood, with sort title, order, label and summary. <strong>Check</strong> fetches
-        each list and compares it with your library. Keeping these collections in sync automatically comes in a later update.
+        collections, Trakt lists and TMDb/Trakt charts are understood, with sort title, order, sync mode and summary.
       </p>
       <div className="mt-4 flex flex-wrap items-end gap-4">
         <Field label="Library for files not listed in config.yml">
@@ -312,7 +256,7 @@ function YamlSection() {
               <div className="text-muted">Saved from config.yml: {result.keys_imported.map((k) => KEY_LABELS[k] ?? k).join(", ")}.</div>
             )}
             {result.unassigned.length > 0 && (
-              <div className="text-warn">No library chosen for: {result.unassigned.join(", ")}. Pick one below.</div>
+              <div className="text-warn">No library chosen for: {result.unassigned.join(", ")}. Pick one on the List collections page.</div>
             )}
             {result.errors.map((e) => (
               <div key={e} className="text-danger">
@@ -328,123 +272,13 @@ function YamlSection() {
         )}
       </div>
 
-      {(definitions.data?.length ?? 0) > 0 && (
-        <>
-          <div className="mt-6 flex items-center justify-between">
-            <h3 className="font-semibold">Imported collections</h3>
-            <Button size="sm" icon={<ListChecks className="size-4" />} loading={check.isPending || Boolean(checking.data)} onClick={() => check.mutate(undefined)}>
-              Check all
-            </Button>
-          </div>
-          {checking.data && <div className="mt-2 text-sm text-muted">{checking.data.message ?? "Checking…"}</div>}
-          <ul className="mt-3 divide-y divide-line rounded-lg border border-line">
-            {definitions.data!.map((d) => {
-              const r = d.check_result;
-              return (
-                <li key={d.id} className="p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="font-medium">
-                        {d.collection ? (
-                          <Link to={`/collections/${d.collection.id}`} className="hover:text-accent">
-                            {d.name}
-                          </Link>
-                        ) : (
-                          d.name
-                        )}
-                        <span className="ml-2 text-xs font-normal text-muted">{d.source_file}</span>
-                      </div>
-                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs">
-                        {d.builders.map((b) => {
-                          const link = builderLink(b);
-                          return (
-                            <a key={b.value} href={link.href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-accent hover:underline">
-                              {link.label} <ExternalLink className="size-3" />
-                            </a>
-                          );
-                        })}
-                      </div>
-                      <div className="mt-1 text-xs text-muted">
-                        {Object.entries(d.options)
-                          .map(([k, v]) => `${k.replace(/_/g, " ")}: ${Array.isArray(v) ? v.join(", ") : String(v)}`)
-                          .join(" · ")}
-                      </div>
-                      {d.unsupported.length > 0 && (
-                        <div className="mt-1 flex items-center gap-1 text-xs text-warn">
-                          <AlertTriangle className="size-3.5" /> Not supported yet: {d.unsupported.join(", ")}
-                        </div>
-                      )}
-                      <div className="mt-1 flex items-center gap-2 text-xs text-muted">
-                        {d.collection ? (
-                          <>
-                            Exists as a collection on <PresenceChips servers={serverMap} presentIds={d.collection.servers} expectedIds={d.collection.servers} />
-                          </>
-                        ) : (
-                          "No matching collection on your servers yet"
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <select
-                        className={selectClass + " h-8"}
-                        value={d.library_id ?? ""}
-                        onChange={(e) => move.mutate({ id: d.id, library_id: e.target.value ? Number(e.target.value) : null })}
-                        aria-label="Library"
-                      >
-                        <option value="">No library</option>
-                        {libs?.libraries.map((l) => (
-                          <option key={l.id} value={l.id}>
-                            {l.name}
-                          </option>
-                        ))}
-                      </select>
-                      <Button size="sm" onClick={() => check.mutate([d.id])} disabled={!d.library_id}>
-                        Check
-                      </Button>
-                      <Button size="sm" variant="ghost" icon={<Trash2 className="size-4" />} aria-label={`Remove ${d.name}`} onClick={() => confirm(`Remove "${d.name}" from Coverarr? Nothing changes on your servers.`) && remove.mutate(d.id)} />
-                    </div>
-                  </div>
-                  {r && (
-                    <div className={cx("mt-3 rounded-md border px-3 py-2 text-sm", r.errors.length ? "border-warn/40 bg-warn/5" : "border-line bg-panel-2")}>
-                      <div>
-                        <span className="font-medium">{r.total}</span> titles in the list ·{" "}
-                        <span className="font-medium">{r.in_library}</span> in {libName(d.library_id) ?? "the library"}
-                        {r.missing_count > 0 && <> · {r.missing_count} not in your library</>}
-                        <span className="text-muted"> · checked {formatDate(d.checked_at)}</span>
-                      </div>
-                      {r.collection && (
-                        <div className="mt-1 flex flex-wrap gap-3 text-xs text-muted">
-                          {Object.entries(r.collection.servers).map(([sid, v]) => {
-                            const s = serverMap.get(Number(sid));
-                            return (
-                              <span key={sid} className="inline-flex items-center gap-1">
-                                {s && <ServerChip server={s} />} {v.in_collection}/{r.in_library} in the collection
-                                {v.extra ? `, ${v.extra} not on the list` : ""}
-                              </span>
-                            );
-                          })}
-                        </div>
-                      )}
-                      {r.missing.length > 0 && (
-                        <details className="mt-1 text-xs text-muted">
-                          <summary className="cursor-pointer">Not in your library</summary>
-                          {r.missing.map((m) => `${m.title}${m.year ? ` (${m.year})` : ""}`).join(", ")}
-                          {r.missing_count > r.missing.length && ` and ${r.missing_count - r.missing.length} more`}
-                        </details>
-                      )}
-                      {r.errors.map((e) => (
-                        <div key={e} className="mt-1 text-xs text-warn">
-                          {e}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </>
-      )}
+      <p className="mt-4 text-sm">
+        Imported collections appear on the{" "}
+        <Link to="/lists" className="text-accent hover:underline">
+          List collections
+        </Link>{" "}
+        page, switched off: check them there, then switch on <em>Keep in sync</em> for the ones Coverarr should take over from Kometa.
+      </p>
     </Card>
   );
 }

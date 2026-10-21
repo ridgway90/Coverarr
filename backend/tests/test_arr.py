@@ -251,7 +251,7 @@ async def test_weekly_scan(app, authed, fake_servers, monkeypatch):
     resp = await client.put("/api/automation", json={**settings, "weekly_scan": weekly})
     assert resp.json()["weekly_next_run"]
     scheduler = app.state.scheduler
-    assert await scheduler.tick() is False  # switching it on doesn't scan straight away
+    assert await scheduler.tick() == []  # switching it on doesn't scan straight away
 
     # Emby's poster is the base; then someone changes Hot Fuzz's poster directly on Jellyfin.
     libs = (await client.get("/api/libraries")).json()["libraries"]
@@ -270,9 +270,10 @@ async def test_weekly_scan(app, authed, fake_servers, monkeypatch):
     jf = fake_servers["jellyfin"].by_title("Hot Fuzz")
     jf.alt_art, jf.art_version = True, jf.art_version + 1
 
-    assert await scheduler.tick(datetime.now() + timedelta(days=7)) is True
+    assert await scheduler.tick(datetime.now() + timedelta(days=7)) == ["safety_scan"]
     await app.state.jobs.wait_idle()
-    assert await scheduler.tick(datetime.now() + timedelta(days=7, hours=1)) is False  # once
+    later = await scheduler.tick(datetime.now() + timedelta(days=7, hours=1))
+    assert "safety_scan" not in later  # once per week
     job = (await _jobs(client, "safety_scan"))[0]
     assert job["status"] == "succeeded", job
     assert job["result"]["push"]["uploaded"] >= 1

@@ -7,8 +7,9 @@ possible: it tracks what each server already has and only touches what actually 
 > **Status: Phase 4 (automation).** Coverarr connects to your servers, imports and matches
 > everything, shows where the servers disagree, creates missing collections and fills in
 > missing members, and pushes the base posters you choose, with overlays drawn on, to every
-> server. Radarr/Sonarr webhooks keep new and upgraded titles up to date, and a weekly scan
-> catches anything missed. Custom collections come next; see [docs/ROADMAP.md](docs/ROADMAP.md).
+> server. Radarr/Sonarr webhooks keep new and upgraded titles up to date, a weekly scan
+> catches anything missed, and collections built from TMDb/Trakt lists and charts are kept the
+> same on every server. See [docs/ROADMAP.md](docs/ROADMAP.md) for what's next.
 
 ## What Phase 1 does
 
@@ -63,6 +64,23 @@ possible: it tracks what each server already has and only touches what actually 
   of only the posters that really differ from their base. Pick the day and hour (the
   container's local time; set `TZ`). A scan missed while Coverarr was down runs when it's back;
   *Run the scan now* runs one straight away.
+- **List collections** (sidebar → List collections): collections built from lists, made in
+  Coverarr or imported from Kometa's YAML. Sources, merged when there are several:
+  - TMDb lists, TMDb collections, single TMDb films/shows, and Trakt lists
+  - charts: TMDb popular, top rated, trending (day/week), now playing, upcoming, airing today,
+    on the air; Trakt trending, popular, anticipated, most watched this week, box office. You
+    choose how many titles, e.g. the top 20.
+
+  Each collection has a sync mode, *add only* or *exact* (exact removes titles that have left
+  the lists, but never when a list fails to load), an order (release date, alphabetical or the
+  list's own order; Plex keeps list order, Jellyfin/Emby sort those by name), and an optional
+  sort title and summary. *Sync* creates the collection on every server that's missing it and
+  adds the titles you have; a new collection from a TMDb collection gets TMDb's poster.
+  Collections switched to *Keep in sync* sync daily (Settings → Automation) and in the weekly
+  scan. Collections imported from Kometa start switched off, so nothing changes until you
+  choose to take them over. Kometa files can use the chart builders too
+  (e.g. `tmdb_popular: 30`). There's no IMDb chart: IMDb has no API (TMDb top rated or a
+  Trakt list are good stand-ins).
 - **Cancel** any queued or running task from *Activity* (or next to its progress bar). Work it
   already finished, such as posters already pushed, is kept.
 - **A–Z bar** on films, TV and collections ("The"/"A"/"An" are skipped, so *The Holiday* is
