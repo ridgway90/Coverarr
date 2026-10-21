@@ -8,11 +8,8 @@ Saving artwork makes it the chosen base poster, so it shows up under Changes unt
 from __future__ import annotations
 
 import asyncio
-import multiprocessing
-import os
 import re
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -29,7 +26,7 @@ from coverarr.services.assets import (
     write_asset,
 )
 from coverarr.services.jobs import JobContext
-from coverarr.services.kometa import IMAGE_SUFFIXES, Prepared, Source, prepare
+from coverarr.services.kometa import IMAGE_SUFFIXES, Prepared, Source, prepare_async
 from coverarr.services.lists import ListClient, ListError
 from coverarr.services.matching import normalize_collection_name, normalize_title
 from coverarr.services.settings_store import get_setting
@@ -60,7 +57,7 @@ async def save_artwork(
     if len(data) > MAX_BYTES:
         raise ArtworkError("That image is larger than 25 MB")
     if prepared is None:
-        prepared = await asyncio.to_thread(prepare, name or "poster", data)
+        prepared = await prepare_async(name or "poster", data)
     if prepared is None:
         raise ArtworkError("That file isn't a JPEG, PNG or WebP image")
     owner_filter = (
@@ -360,51 +357,61 @@ async def run_poster_set(ctx: JobContext) -> dict[str, Any]:
         entries = await asyncio.to_thread(source.entries)
         async with ctx.sessionmaker() as session:
             taken = await taken_paths(session)
-            for idx, (name, reader) in enumerate(entries):
-                parsed = parse_set_name(name)
-                if parsed is None:
-                    counts["skipped"] += 1
-                    continue
-                item_ids, coll_ids = matcher.match(parsed)
-                if not item_ids and not coll_ids:
-                    counts["unmatched"] += 1
-                    unmatched.append(parsed.name)
-                    continue
-                data = await asyncio.to_thread(reader)
-                for owner_items, owner_colls in [([i], []) for i in item_ids] + [
-                    ([], [c]) for c in coll_ids
-                ]:
-                    target = (
-                        await session.get(MediaItem, owner_items[0])
-                        if owner_items
-                        else await session.get(Collection, owner_colls[0])
-                    )
-                    choose = not (keep_choices and target.poster_source)
-                    try:
-                        await save_artwork(
-                            session,
-                            config_dir,
-                            source="set",
-                            data=data,
-                            name=parsed.name,
-                            media_item_id=owner_items[0] if owner_items else None,
-                            collection_id=owner_colls[0] if owner_colls else None,
-                            choose=choose,
-                            taken=taken,
+            # Match a batch of files, decode and fingerprint them on every core, then save.
+            for start in range(0, len(entries), 32):
+                batch: list[tuple[SetFile, list[int], list[int], bytes]] = []
+                for name, reader in entries[start : start + 32]:
+                    parsed = parse_set_name(name)
+                    if parsed is None:
+                        counts["skipped"] += 1
+                        continue
+                    item_ids, coll_ids = matcher.match(parsed)
+                    if not item_ids and not coll_ids:
+                        counts["unmatched"] += 1
+                        unmatched.append(parsed.name)
+                        continue
+                    batch.append((parsed, item_ids, coll_ids, await asyncio.to_thread(reader)))
+                prepared = await asyncio.gather(
+                    *(prepare_async(parsed.name, data) for parsed, _, _, data in batch)
+                )
+                for (parsed, item_ids, coll_ids, data), ready in zip(batch, prepared, strict=True):
+                    for owner_items, owner_colls in [([i], []) for i in item_ids] + [
+                        ([], [c]) for c in coll_ids
+                    ]:
+                        target = (
+                            await session.get(MediaItem, owner_items[0])
+                            if owner_items
+                            else await session.get(Collection, owner_colls[0])
                         )
-                    except ArtworkError as exc:
-                        counts["unreadable"] += 1
-                        await ctx.log(f"{parsed.name}: {exc}")
-                        break
-                    counts["imported"] += 1
-                    counts["applied" if choose else "kept_choice"] += 1
-                else:
-                    matched.append(parsed.name)
-                if idx % 20 == 0:
-                    await session.commit()
-                    await ctx.progress(
-                        0.95 * idx / max(len(entries), 1), f"Read {idx}/{len(entries)}"
-                    )
+                        choose = not (keep_choices and target.poster_source)
+                        try:
+                            if ready is None:
+                                raise ArtworkError("That file isn't a JPEG, PNG or WebP image")
+                            await save_artwork(
+                                session,
+                                config_dir,
+                                source="set",
+                                data=data,
+                                name=parsed.name,
+                                media_item_id=owner_items[0] if owner_items else None,
+                                collection_id=owner_colls[0] if owner_colls else None,
+                                choose=choose,
+                                taken=taken,
+                                prepared=ready,
+                            )
+                        except ArtworkError as exc:
+                            counts["unreadable"] += 1
+                            await ctx.log(f"{parsed.name}: {exc}")
+                            break
+                        counts["imported"] += 1
+                        counts["applied" if choose else "kept_choice"] += 1
+                    else:
+                        matched.append(parsed.name)
+                await session.commit()
+                done = min(start + 32, len(entries))
+                await ctx.progress(
+                    0.95 * done / max(len(entries), 1), f"Read {done}/{len(entries)}"
+                )
             from coverarr.services.review import refresh_issues
 
             await refresh_issues(session)
@@ -585,7 +592,7 @@ async def run_tmdb_reset(ctx: JobContext) -> dict[str, Any]:
                 missing.append(t.title)
             return
         # Decoding and fingerprinting is the CPU-heavy part: spread it over the cores.
-        prepared = await loop.run_in_executor(pool, prepare, path.lstrip("/"), data)
+        prepared = await prepare_async(path.lstrip("/"), data)
         if prepared is None:
             counts["failed"] += 1
             await ctx.log(f"{t.title}: TMDb sent an unreadable image")
@@ -613,11 +620,6 @@ async def run_tmdb_reset(ctx: JobContext) -> dict[str, Any]:
         if done % 20 == 0:
             await ctx.progress(0.98 * done / max(len(targets), 1), f"Fetched {done}/{len(targets)}")
 
-    loop = asyncio.get_running_loop()
-    pool = ProcessPoolExecutor(
-        max_workers=max(1, (os.cpu_count() or 2) - 1),
-        mp_context=multiprocessing.get_context("spawn"),
-    )
     try:
         async with client:
             # Shows before their seasons, so each show's TMDb id is looked up once.
@@ -625,7 +627,6 @@ async def run_tmdb_reset(ctx: JobContext) -> dict[str, Any]:
             for start in range(0, len(targets), 200):
                 await asyncio.gather(*(one(t) for t in targets[start : start + 200]))
     finally:
-        pool.shutdown(wait=True, cancel_futures=True)
         # Also when cancelled: the posters replaced so far need their issues updated.
         from coverarr.services.review import refresh_issues
 

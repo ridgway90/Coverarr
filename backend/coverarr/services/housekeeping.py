@@ -37,8 +37,16 @@ from coverarr.models import (
     ServerCollection,
     ServerItem,
 )
-from coverarr.services.assets import ASSETS, _prune, describe_owners, owner_key, relocate_artwork
+from coverarr.services.assets import (
+    ASSETS,
+    _prune,
+    describe_owners,
+    owner_key,
+    relocate_artwork,
+    taken_paths,
+)
 from coverarr.services.jobs import JobContext
+from coverarr.services.kometa import prepare_async
 from coverarr.services.load import load_profile
 from coverarr.services.posters import EDGE_H, EDGE_W, hamming
 from coverarr.services.settings_store import get_setting
@@ -397,9 +405,13 @@ async def run_store_bases(ctx: JobContext) -> dict[str, Any]:
     for w in work:
         by_server[w[2]].append(w)
     done = 0
+    taken: dict[str, str] | None = None
+
+    async def _none() -> None:
+        return None
 
     async def one_server(server_id: int, jobs: list) -> None:
-        nonlocal done
+        nonlocal done, taken
         async with client_for(servers[server_id], concurrency=profile.poster_concurrency) as client:
             for start in range(0, len(jobs), 20):
                 batch = jobs[start : start + 20]
@@ -412,9 +424,15 @@ async def run_store_bases(ctx: JobContext) -> dict[str, Any]:
                         return None
 
                 datas = await asyncio.gather(*(fetch(w) for w in batch))
+                # Decode and fingerprint on every core before taking the write lock.
+                prepared = await asyncio.gather(
+                    *(prepare_async("poster", d) if d else _none() for d in datas)
+                )
                 async with lock, sm() as session:
-                    for w, data in zip(batch, datas, strict=True):
-                        if data is None:
+                    if taken is None:
+                        taken = await taken_paths(session)
+                    for w, data, ready in zip(batch, datas, prepared, strict=True):
+                        if data is None or ready is None:
                             counts["failed"] += 1
                             continue
                         try:
@@ -427,6 +445,8 @@ async def run_store_bases(ctx: JobContext) -> dict[str, Any]:
                                 media_item_id=w[1] if w[0] == "item" else None,
                                 collection_id=w[1] if w[0] == "collection" else None,
                                 choose=True,
+                                taken=taken,
+                                prepared=ready,
                             )
                             counts["stored"] += 1
                         except ArtworkError as exc:

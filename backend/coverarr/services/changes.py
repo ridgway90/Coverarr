@@ -24,10 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import io
-import multiprocessing
-import os
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +44,8 @@ from coverarr.models import (
     ServerCollection,
     ServerItem,
 )
+from coverarr.services import cpu
+from coverarr.services.assets import taken_paths
 from coverarr.services.jobs import JobContext
 from coverarr.services.load import load_profile
 from coverarr.services.overlays import (
@@ -551,11 +550,6 @@ async def _base_bytes(
     return await client.fetch_poster(row.remote_id, row.poster_ref)
 
 
-def render_workers() -> int:
-    """Render processes: every core but one (at least one)."""
-    return max(1, (os.cpu_count() or 2) - 1)
-
-
 def _clean_old_renders(dest: Path) -> None:
     owner = dest.name.rsplit("-", 1)[0]
     for old in dest.parent.glob(f"{owner}-*.jpg"):
@@ -597,7 +591,7 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
     counts: dict[str, int] = defaultdict(int)
     done = 0
     write_lock = asyncio.Lock()
-    loop = asyncio.get_running_loop()
+    taken: dict[str, str] | None = None
 
     async with AsyncExitStack() as stack:
         clients: dict[int, MediaServerClient] = {}
@@ -606,18 +600,13 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
                 clients[sid] = await stack.enter_async_context(
                     client_for(server, concurrency=profile.poster_concurrency)
                 )
-        pool: ProcessPoolExecutor | None = None
-        if renders:
-            pool = ProcessPoolExecutor(
-                max_workers=render_workers(), mp_context=multiprocessing.get_context("spawn")
-            )
-            stack.callback(pool.shutdown, wait=True, cancel_futures=True)
 
         async def rendered(change: Change) -> tuple[bytes, str, str]:
             """(JPEG, fingerprint, pushed_key) of the overlaid poster, rendering it if needed.
             A server poster used as the base is kept as the title's "original" artwork first,
             so later renders start from it rather than from an overlaid copy."""
-            assert change.render is not None and pool is not None
+            nonlocal taken
+            assert change.render is not None
             base = change.render.base
             if base.startswith("server:"):
                 row_id = int(base.split(":", 2)[1])
@@ -628,6 +617,8 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
                     remote_id, ref, server_id = row.remote_id, row.poster_ref, row.server_id
                 data = await clients[server_id].fetch_poster(remote_id, ref)
                 async with write_lock, sm() as session:
+                    if taken is None:
+                        taken = await taken_paths(session)
                     art = await save_artwork(
                         session,
                         config_dir,
@@ -636,6 +627,7 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
                         name=f"{servers[server_id].name} poster",
                         media_item_id=change.id,
                         choose=True,
+                        taken=taken,
                     )
                     await session.commit()
                     base, file_path = f"artwork:{art.id}", art.file_path
@@ -650,10 +642,9 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
             dest = rendered_path(config_dir, f"m{change.id}", key)
             if await asyncio.to_thread(dest.is_file):
                 data = await asyncio.to_thread(dest.read_bytes)
-                fingerprint = await asyncio.to_thread(fingerprints, data)
+                fingerprint = await cpu.run(fingerprints, data)
             else:
-                fingerprint = await loop.run_in_executor(
-                    pool,
+                fingerprint = await cpu.run(
                     render_to_file,
                     str(config_dir / file_path),
                     change.render.plan.size,
@@ -672,7 +663,7 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
             else:
                 async with sm() as session:
                     data = await _base_bytes(session, change, clients, config_dir)
-                fingerprint = await asyncio.to_thread(fingerprints, data)
+                fingerprint = await cpu.run(fingerprints, data)
                 pushed_key = f"b:{change.source}"
             content_type = await asyncio.to_thread(_content_type, data)
 
@@ -690,7 +681,7 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
             results = await asyncio.gather(*(upload(sc) for sc in change.servers))
             return [r for r in results if r]
 
-        chunk = max(CHUNK, render_workers() * 4) if renders else CHUNK
+        chunk = max(CHUNK, cpu.workers() * 4)
         for start in range(0, len(changes), chunk):
             batch = changes[start : start + chunk]
             results = await asyncio.gather(*(push(c) for c in batch), return_exceptions=True)
