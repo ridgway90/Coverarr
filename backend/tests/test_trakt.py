@@ -109,3 +109,62 @@ async def test_rejected_refresh_after_expiry_signs_out(app, authed):
             )
             assert await trakt.access_token(session) is None
         assert not (await trakt.status(session))["connected"]
+
+
+async def test_refused_sign_in_falls_back_to_public_and_is_dropped(app, authed, fake_servers):
+    """A sign-in Trakt no longer accepts (e.g. imported from Kometa) mustn't break public lists."""
+    from tests.conftest import run_job
+    from tests.test_flow import add_servers
+
+    client = authed
+    await add_servers(client)
+    await run_job(app, client, "import")
+    libs = (await client.get("/api/libraries")).json()["libraries"]
+    films = next(lib["id"] for lib in libs if lib["kind"] == "movie")
+    await client.put("/api/settings", json={"trakt_client_id": "abc123"})
+    async with app.state.jobs.sessionmaker() as session:
+        await set_setting(session, "trakt_access_token", "from-kometa")  # no expiry stored
+        await session.commit()
+    url = "https://trakt.tv/users/2borno2b/lists/christmas-movies-extravanganza"
+    definition = (
+        await client.post(
+            "/api/definitions",
+            json={
+                "name": "Xmas",
+                "library_id": films,
+                "builders": [{"type": "trakt_list", "value": url}],
+            },
+        )
+    ).json()
+
+    def items(request):
+        if "Authorization" in request.headers:
+            return httpx.Response(401)
+        movie = {"title": "Elf", "year": 2003, "ids": {"tmdb": 10719}}
+        return httpx.Response(200, json=[{"type": "movie", "movie": movie}])
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get(url__regex=r"https://api\.trakt\.tv/users/2borno2b/.*").mock(side_effect=items)
+        await client.post("/api/definitions/check", json={"ids": [definition["id"]]})
+        await app.state.jobs.wait_idle()
+    checked = next(
+        d for d in (await client.get("/api/definitions")).json() if d["id"] == definition["id"]
+    )
+    assert checked["check_result"]["errors"] == []
+    assert checked["check_result"]["in_library"] == 1
+    assert not (await client.get("/api/trakt")).json()["connected"]
+    job = next(
+        j for j in (await client.get("/api/jobs")).json() if j["kind"] == "check_definitions"
+    )
+    log = (await client.get(f"/api/jobs/{job['id']}")).json()["log"]
+    assert any("refused the saved sign-in" in line for line in log)
+
+    # A wrong client ID says so, rather than "API key rejected".
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get(url__regex=r"https://api\.trakt\.tv/.*").respond(403)
+        await client.post("/api/definitions/check", json={"ids": [definition["id"]]})
+        await app.state.jobs.wait_idle()
+    checked = next(
+        d for d in (await client.get("/api/definitions")).json() if d["id"] == definition["id"]
+    )
+    assert "client ID" in checked["check_result"]["errors"][0]
