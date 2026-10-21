@@ -267,3 +267,30 @@ async def test_trakt_charts():
                 raise AssertionError("box office has no shows")
             except Exception as exc:  # noqa: BLE001
                 assert "isn't available" in str(exc)
+
+
+async def test_kometa_chart_replaces_its_titles(app, authed, fake_servers):
+    """Kometa charts carry no sync mode (it's usually in a template): they default to exact."""
+    client = authed
+    await add_servers(client)
+    await run_job(app, client, "import")
+    await client.put("/api/settings", json={"tmdb_api_key": KEY})
+    films = await _films(client)
+    yaml = "collections:\n  TMDb Popular:\n    tmdb_popular: 10\n    template: {name: chart}\n"
+    files = {"files": ("tmdb.yml", yaml.encode(), "text/yaml")}
+    await client.post("/api/kometa/yaml", files=files, data={"library_id": str(films)})
+    definition = (await client.get("/api/definitions")).json()[0]
+    assert definition["sync_mode"] == "sync"
+    plex = fake_servers["plex"]
+    with respx.mock(assert_all_called=False) as mock:
+        _tmdb(mock)
+        await _sync(app, client, definition["id"])
+        assert sorted(_titles(plex, _coll(plex, "TMDb Popular"))) == ["Home Alone", "Paddington 2"]
+        # Now only the top 1: Home Alone drops off the chart and out of the collection.
+        await client.put(
+            f"/api/definitions/{definition['id']}",
+            json={"builders": [{"type": "tmdb_popular", "value": 1}]},
+        )
+        await _sync(app, client, definition["id"])
+    for srv in fake_servers.values():
+        assert _titles(srv, _coll(srv, "TMDb Popular")) == ["Paddington 2"]

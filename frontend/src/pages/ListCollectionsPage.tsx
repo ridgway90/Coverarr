@@ -120,7 +120,7 @@ function DefinitionRow({
   const missingCount = (newer ? sync?.missing_count : check?.missing_count) ?? 0;
   const options = [
     ORDER_LABELS[d.options.collection_order ?? "release"],
-    d.options.sync_mode === "sync" ? "exact" : "add only",
+    d.sync_mode === "sync" ? "exact" : "add only",
     d.options.sort_title && `sort title "${d.options.sort_title}"`,
   ].filter(Boolean);
 
@@ -253,13 +253,14 @@ function DefinitionForm({ definition, onClose }: { definition: Definition | null
   const [name, setName] = useState(definition?.name ?? "");
   const [libraryId, setLibraryId] = useState<number | "">(definition?.library_id ?? libraries[0]?.id ?? "");
   const [builders, setBuilders] = useState<Builder[]>(definition?.builders.length ? definition.builders : [{ type: "tmdb_list", value: "" }]);
-  const [mode, setMode] = useState(definition?.options.sync_mode ?? "append");
+  const [mode, setMode] = useState(definition?.sync_mode ?? "append");
   const [order, setOrder] = useState(definition?.options.collection_order ?? "release");
   const [sortTitle, setSortTitle] = useState(definition?.options.sort_title ?? "");
   const [summary, setSummary] = useState(definition?.options.summary ?? "");
   const [enabled, setEnabled] = useState(definition?.enabled ?? true);
   const kind = libraries.find((l) => l.id === libraryId)?.kind ?? "movie";
   const types = SOURCE_TYPES.filter((s) => s.kinds.includes(kind));
+  const hasChart = builders.some((b) => SOURCE_BY_TYPE.get(b.type)?.chart);
 
   const save = useMutation({
     mutationFn: () => {
@@ -351,7 +352,16 @@ function DefinitionForm({ definition, onClose }: { definition: Definition | null
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Sync" hint="Add only never removes anything from the collection.">
+          <Field
+            label="Sync"
+            hint={
+              hasChart && mode === "append" ? (
+                <span className="text-warn">Charts change every day: with Add only, titles that drop off the chart stay, so the collection keeps growing. Use Exact to keep just the current top titles.</span>
+              ) : (
+                "Add only never removes anything from the collection."
+              )
+            }
+          >
             <select className={selectClass + " w-full"} value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}>
               {Object.entries(MODE_LABELS).map(([k, label]) => (
                 <option key={k} value={k}>

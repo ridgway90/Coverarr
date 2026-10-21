@@ -31,7 +31,13 @@ from coverarr.models import (
 )
 from coverarr.services.jobs import JobContext
 from coverarr.services.kometa_yaml import ParsedCollection
-from coverarr.services.lists import ListClient, ListEntry, ListError, tmdb_id_from
+from coverarr.services.lists import (
+    ListClient,
+    ListEntry,
+    ListError,
+    default_sync_mode,
+    tmdb_id_from,
+)
 from coverarr.services.matching import normalize_collection_name, normalize_title
 from coverarr.services.settings_store import get_setting
 
@@ -226,7 +232,7 @@ async def sync_definition(
         raise ListError("Choose a library for this collection first")
     resolved = await resolve_definition(session, definition, lists)
     options = definition.options or {}
-    mode = options.get("sync_mode") or "append"
+    mode = options.get("sync_mode") or default_sync_mode(definition.builders or [])
     order = options.get("collection_order") or "release"
     wanted = resolved.ordered
     result: dict[str, Any] = {
