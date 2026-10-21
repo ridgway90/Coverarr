@@ -162,3 +162,35 @@ async def test_discard_change(app, authed, fake_servers):
     assert [i["title"] for i in await issues(client, "poster_differs")] == ["Arrival (2016)"]
     item = (await client.get(f"/api/items/{change['id']}")).json()
     assert item["poster_source"] is None
+
+
+async def test_overlays_without_kometa_label(app, authed, fake_servers):
+    """Kometa's overlays are still on Plex but its "Overlay" label is gone (e.g. after a
+    partial remove_overlays). The artwork matches Jellyfin's, but the edges don't."""
+    client = authed
+    ids = await add_servers(client)
+    plex = fake_servers["plex"]
+    for title in ("Hot Fuzz", "Elf"):
+        plex.by_title(title).labels = []  # overlays stay drawn on
+    plex.by_title("Elf").overlay = False  # Elf really is clean on Plex
+    await run_job(app, client, "import")
+    films = await _films(client)
+    for title in ("Hot Fuzz", "Elf"):
+        page = await client.get("/api/items", params={"library_id": films["id"], "q": title})
+        item = next(i for i in page.json()["items"] if i["title"] == title)
+        resp = await client.put(
+            f"/api/items/{item['id']}/poster-source",
+            json={"poster_source": f"server:{ids['jellyfin']}"},
+        )
+        assert resp.status_code == 200
+
+    changes = {c["title"]: c for c in (await _changes(client))["items"]}
+    assert "Elf (2003)" not in changes
+    hot_fuzz = changes["Hot Fuzz (2007)"]
+    assert [(s["server_id"], s["reason"]) for s in hot_fuzz["servers"]] == [
+        (ids["plex"], "has overlays")
+    ]
+    await _push(app, client, media_item_ids=[hot_fuzz["id"]])
+    assert plex.by_title("Hot Fuzz").uploaded is not None
+    await run_job(app, client, "import")
+    assert "Hot Fuzz (2007)" not in {c["title"] for c in (await _changes(client))["items"]}

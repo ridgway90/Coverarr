@@ -197,6 +197,8 @@ class ServerItem(Base):
     # ("base:<source>" or the render key of an overlaid poster).
     pushed_ref: Mapped[str | None] = mapped_column(String(500))
     pushed_key: Mapped[str | None] = mapped_column(String(100))
+    # 16x24 greyscale thumbnail (hex) for telling overlays apart (services/posters.py).
+    poster_edges: Mapped[str | None] = mapped_column(String(800))
     # Resolution / HDR / DV / edition / network as this server reports them (for overlays).
     media: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     media_item_id: Mapped[int | None] = mapped_column(
@@ -253,6 +255,7 @@ class ServerCollection(Base):
     poster_hash_ref: Mapped[str | None] = mapped_column(String(500))
     pushed_ref: Mapped[str | None] = mapped_column(String(500))
     pushed_key: Mapped[str | None] = mapped_column(String(100))
+    poster_edges: Mapped[str | None] = mapped_column(String(800))
     member_remote_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     collection_id: Mapped[int | None] = mapped_column(
         ForeignKey("collections.id", ondelete="SET NULL")
@@ -330,6 +333,7 @@ class Artwork(Base):
     width: Mapped[int | None] = mapped_column(Integer)
     height: Mapped[int | None] = mapped_column(Integer)
     poster_hash: Mapped[str | None] = mapped_column(String(32))
+    poster_edges: Mapped[str | None] = mapped_column(String(800))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 

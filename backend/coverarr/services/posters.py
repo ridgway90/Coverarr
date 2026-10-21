@@ -33,6 +33,13 @@ HASH_WIDTH = 200
 CROP_FRACTION = 0.18
 
 
+# Edge signature: a 16x24 greyscale thumbnail. The middle-band hash above deliberately ignores
+# the top and bottom of a poster (so "same artwork, other overlays" still matches); this
+# keeps those edges, so overlays on otherwise identical artwork can be told apart.
+EDGE_W, EDGE_H, EDGE_ROWS = 16, 24, 4
+EDGE_MEAN, EDGE_MAX = 6, 30  # re-encoding moves edges ~1; jmxd gradients ~50, badges 26+
+
+
 def hamming(a: str, b: str) -> int:
     return (int(a, 16) ^ int(b, 16)).bit_count()
 
@@ -52,10 +59,31 @@ def poster_hash(data: bytes) -> str:
     return f"{bits:016x}"
 
 
-async def _hash_one(client: MediaServerClient, remote_id: str, ref: str) -> str | None:
+def edge_signature(data: bytes) -> str:
+    with Image.open(io.BytesIO(data)) as img:
+        small = img.convert("L").resize((EDGE_W, EDGE_H), Image.Resampling.BOX)
+        return small.tobytes().hex()
+
+
+def edges_differ(a: str | None, b: str | None) -> bool | None:
+    """Whether two posters' top and bottom edges differ (``None`` if either is unknown)."""
+    if not a or not b or len(a) != len(b):
+        return None
+    pa, pb = bytes.fromhex(a), bytes.fromhex(b)
+    rows = [*range(EDGE_ROWS), *range(EDGE_H - EDGE_ROWS, EDGE_H)]
+    diffs = [abs(pa[r * EDGE_W + c] - pb[r * EDGE_W + c]) for r in rows for c in range(EDGE_W)]
+    return sum(diffs) / len(diffs) >= EDGE_MEAN or max(diffs) >= EDGE_MAX
+
+
+def fingerprints(data: bytes) -> tuple[str, str]:
+    """(middle-band hash, edge signature)."""
+    return poster_hash(data), edge_signature(data)
+
+
+async def _hash_one(client: MediaServerClient, remote_id: str, ref: str) -> tuple[str, str] | None:
     try:
         data = await client.fetch_poster(remote_id, ref, max_width=HASH_WIDTH)
-        return await asyncio.to_thread(poster_hash, data)
+        return await asyncio.to_thread(fingerprints, data)
     except (MediaServerError, OSError, ValueError) as exc:
         log.warning("Could not hash poster %s: %s", remote_id, exc)
         return None
@@ -64,7 +92,9 @@ async def _hash_one(client: MediaServerClient, remote_id: str, ref: str) -> str 
 async def _pending(session: AsyncSession, server_id: int) -> list[tuple[str, int, str, str]]:
     """(table, row id, remote id, poster ref) for posters needing a (re)hash."""
     stale = or_(
-        ServerItem.poster_hash_ref.is_(None), ServerItem.poster_hash_ref != ServerItem.poster_ref
+        ServerItem.poster_hash_ref.is_(None),
+        ServerItem.poster_hash_ref != ServerItem.poster_ref,
+        ServerItem.poster_edges.is_(None),
     )
     items = await session.execute(
         select(ServerItem.id, ServerItem.remote_id, ServerItem.poster_ref).where(
@@ -88,6 +118,7 @@ async def _pending(session: AsyncSession, server_id: int) -> list[tuple[str, int
     stale_c = or_(
         ServerCollection.poster_hash_ref.is_(None),
         ServerCollection.poster_hash_ref != ServerCollection.poster_ref,
+        ServerCollection.poster_edges.is_(None),
     )
     colls = await session.execute(
         select(ServerCollection.id, ServerCollection.remote_id, ServerCollection.poster_ref).where(
@@ -98,6 +129,38 @@ async def _pending(session: AsyncSession, server_id: int) -> list[tuple[str, int
         )
     )
     return [("item", *r) for r in items.all()] + [("collection", *r) for r in colls.all()]
+
+
+async def _backfill_artwork_edges(sm: Any, ctx: JobContext) -> None:
+    """Edge signatures for artwork stored before they existed (read from the local files)."""
+    from coverarr.models import Artwork
+    from coverarr.services.overlays import config_dir
+
+    async with sm() as session:
+        rows = (
+            await session.execute(
+                select(Artwork.id, Artwork.file_path).where(Artwork.poster_edges.is_(None))
+            )
+        ).all()
+    if not rows:
+        return
+    root = config_dir()
+
+    def read(rel: str) -> str | None:
+        try:
+            return edge_signature((root / rel).read_bytes())
+        except (OSError, ValueError):
+            return None
+
+    for start in range(0, len(rows), 200):
+        batch = rows[start : start + 200]
+        sigs = await asyncio.to_thread(lambda b=batch: [read(r.file_path) for r in b])
+        updates = [{"id": r.id, "poster_edges": s} for r, s in zip(batch, sigs, strict=True) if s]
+        if updates:
+            async with sm() as session:
+                await session.execute(update(Artwork), updates)
+                await session.commit()
+    await ctx.log(f"Edge signatures for {len(rows)} stored artworks")
 
 
 async def run_poster_scan(ctx: JobContext) -> dict[str, Any]:
@@ -131,7 +194,14 @@ async def run_poster_scan(ctx: JobContext) -> dict[str, Any]:
                         counts["failed"] += 1
                         continue
                     target = items if table == "item" else colls
-                    target.append({"id": row_id, "poster_hash": h, "poster_hash_ref": ref})
+                    target.append(
+                        {
+                            "id": row_id,
+                            "poster_hash": h[0],
+                            "poster_edges": h[1],
+                            "poster_hash_ref": ref,
+                        }
+                    )
                 async with lock, sm() as session:
                     if items:
                         await session.execute(update(ServerItem), items)
@@ -142,6 +212,7 @@ async def run_poster_scan(ctx: JobContext) -> dict[str, Any]:
                 done += len(batch)
                 await ctx.progress(0.95 * done / max(total, 1), f"Fingerprinted {done}/{total}")
 
+    await _backfill_artwork_edges(sm, ctx)
     results = await asyncio.gather(*(scan_server(s) for s in servers), return_exceptions=True)
     for server, res in zip(servers, results, strict=True):
         if isinstance(res, Exception):

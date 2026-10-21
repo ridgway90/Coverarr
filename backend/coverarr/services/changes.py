@@ -62,7 +62,7 @@ from coverarr.services.overlays import (
     render_to_file,
     rendered_path,
 )
-from coverarr.services.posters import hamming, poster_hash
+from coverarr.services.posters import edges_differ, fingerprints, hamming
 from coverarr.services.settings_store import get_setting
 
 CHUNK = 20
@@ -143,6 +143,7 @@ ITEM_COLS = (
     ServerItem.poster_ref,
     ServerItem.poster_hash,
     ServerItem.poster_hash_ref,
+    ServerItem.poster_edges,
     ServerItem.pushed_ref,
     ServerItem.pushed_key,
     # Decoding every row's labels JSON is the slowest part at scale; ask SQLite instead.
@@ -155,6 +156,7 @@ COLL_COLS = (
     ServerCollection.poster_ref,
     ServerCollection.poster_hash,
     ServerCollection.poster_hash_ref,
+    ServerCollection.poster_edges,
     ServerCollection.pushed_ref,
     ServerCollection.pushed_key,
     type_coerce(ServerCollection.labels, String).ilike('%"overlay"%').label("overlay_label"),
@@ -163,6 +165,10 @@ COLL_COLS = (
 
 def _fresh_hash(row: Any) -> str | None:
     return row.poster_hash if row.poster_ref and row.poster_hash_ref == row.poster_ref else None
+
+
+def _fresh_edges(row: Any) -> str | None:
+    return row.poster_edges if row.poster_ref and row.poster_hash_ref == row.poster_ref else None
 
 
 def _shows_render(row: Any) -> bool:
@@ -207,13 +213,14 @@ def _assess(change: Change, rows: list[Any], artworks: dict[int, Any], threshold
     key = "server_item_id" if change.target == "item" else "server_collection_id"
     kind, _, ref = change.source.partition(":")
     base_hash: str | None = None
+    base_edges: str | None = None
     source_server: int | None = None
     if kind == "artwork":
         art = artworks.get(int(ref)) if ref.isdigit() else None
         if art is None:
             change.problem = "The chosen artwork no longer exists"
             return
-        change.base, base_hash = _art_poster(art), art.poster_hash
+        change.base, base_hash, base_edges = _art_poster(art), art.poster_hash, art.poster_edges
     elif kind == "server" and ref.isdigit():
         source_server = int(ref)
         src = next((r for r in rows if r.server_id == source_server), None)
@@ -221,6 +228,7 @@ def _assess(change: Change, rows: list[Any], artworks: dict[int, Any], threshold
             change.problem = "The server you picked the poster from no longer has it"
             return
         change.base, base_hash = _row_poster(src, key), _fresh_hash(src)
+        base_edges = _fresh_edges(src)
     else:
         change.problem = f"Unknown poster source {change.source!r}"
         return
@@ -249,6 +257,10 @@ def _assess(change: Change, rows: list[Any], artworks: dict[int, Any], threshold
             reason = "different poster"
         elif _has_overlay(row):
             reason = "has Kometa overlays"
+        elif edges_differ(_fresh_edges(row), base_edges):
+            # Same artwork, but gradients or badges at the top/bottom that the base doesn't
+            # have (e.g. Kometa overlays whose label was removed).
+            reason = "has overlays"
         else:
             continue
         change.servers.append(
@@ -468,9 +480,13 @@ async def compute_changes(
 
 async def _artworks(session: AsyncSession, owner_filter: Any) -> dict[int, Any]:
     rows = await session.execute(
-        select(Artwork.id, Artwork.source, Artwork.poster_hash, Artwork.created_at).where(
-            owner_filter
-        )
+        select(
+            Artwork.id,
+            Artwork.source,
+            Artwork.poster_hash,
+            Artwork.poster_edges,
+            Artwork.created_at,
+        ).where(owner_filter)
     )
     return {a.id: a for a in rows}
 
@@ -621,7 +637,7 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
             dest = rendered_path(config_dir, f"m{change.id}", key)
             if await asyncio.to_thread(dest.is_file):
                 data = await asyncio.to_thread(dest.read_bytes)
-                fingerprint = await asyncio.to_thread(poster_hash, data)
+                fingerprint = await asyncio.to_thread(fingerprints, data)
             else:
                 fingerprint = await loop.run_in_executor(
                     pool,
@@ -643,7 +659,7 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
             else:
                 async with sm() as session:
                     data = await _base_bytes(session, change, clients, config_dir)
-                fingerprint = await asyncio.to_thread(poster_hash, data)
+                fingerprint = await asyncio.to_thread(fingerprints, data)
                 pushed_key = f"b:{change.source}"
             content_type = await asyncio.to_thread(_content_type, data)
 
@@ -678,7 +694,8 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
                             continue
                         row.poster_ref = new_ref or row.poster_ref
                         row.pushed_ref, row.pushed_key = row.poster_ref, pushed_key
-                        row.poster_hash, row.poster_hash_ref = fingerprint, row.poster_ref
+                        row.poster_hash, row.poster_edges = fingerprint
+                        row.poster_hash_ref = row.poster_ref
                         row.labels = [
                             label for label in row.labels or [] if str(label).lower() != "overlay"
                         ]

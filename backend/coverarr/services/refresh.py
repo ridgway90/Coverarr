@@ -94,7 +94,8 @@ async def run_refresh_item(ctx: JobContext) -> dict[str, Any]:
             before = {f: getattr(row, f) for f in (*ID_FIELDS, "title", "poster_ref")}
             apply_remote_item(row, remote)
             if new_hash is not None:
-                row.poster_hash, row.poster_hash_ref = new_hash, remote.poster_ref
+                row.poster_hash, row.poster_edges = new_hash
+                row.poster_hash_ref = remote.poster_ref
             changed = [LABELS[f] for f, v in before.items() if getattr(row, f) != v]
             if row.kind == "show":
                 await upsert_items(
@@ -166,7 +167,8 @@ async def run_refresh_collection(ctx: JobContext) -> dict[str, Any]:
             row.smart, row.poster_ref, row.labels = remote.smart, remote.poster_ref, remote.labels
             row.member_remote_ids = remote.member_ids
             if new_hash is not None:
-                row.poster_hash, row.poster_hash_ref = new_hash, remote.poster_ref
+                row.poster_hash, row.poster_edges = new_hash
+                row.poster_hash_ref = remote.poster_ref
             count = len(remote.member_ids)
             changes.append(
                 f"{server.name}: {count} items"

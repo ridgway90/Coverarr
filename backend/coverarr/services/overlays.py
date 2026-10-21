@@ -483,9 +483,11 @@ def render_image(base: bytes | str, size: tuple[int, int], layers: list[tuple[st
     return out.getvalue()
 
 
-def render_to_file(base: bytes | str, size: tuple[int, int], layers: list, dest: str) -> str:
-    """Worker entry point: render and write ``dest`` atomically; returns the poster hash."""
-    from coverarr.services.posters import poster_hash
+def render_to_file(
+    base: bytes | str, size: tuple[int, int], layers: list, dest: str
+) -> tuple[str, str]:
+    """Worker entry point: render and write ``dest`` atomically; returns its fingerprints."""
+    from coverarr.services.posters import fingerprints
 
     data = render_image(base, size, layers)
     tmp = f"{dest}.tmp{os.getpid()}"
@@ -493,7 +495,7 @@ def render_to_file(base: bytes | str, size: tuple[int, int], layers: list, dest:
     with open(tmp, "wb") as fh:
         fh.write(data)
     os.replace(tmp, dest)
-    return poster_hash(data)
+    return fingerprints(data)
 
 
 def plan_args(plan: RenderPlan) -> list[tuple[str, Any]]:
