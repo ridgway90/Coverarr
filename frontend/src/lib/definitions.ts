@@ -25,6 +25,8 @@ export interface Definition {
     unknown
   >;
   unsupported: string[];
+  /** The sync mode in effect: the chosen one, or the default for these sources. */
+  sync_mode: "append" | "sync";
   enabled: boolean;
   checked_at: string | null;
   check_result: {

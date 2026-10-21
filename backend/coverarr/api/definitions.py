@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.db import get_session
 from coverarr.models import Collection, CollectionDefinition, Library, ServerCollection
-from coverarr.services.lists import ListError, normalize_builder
+from coverarr.services.lists import ListError, default_sync_mode, normalize_builder
 from coverarr.services.matching import normalize_collection_name
 
 router = APIRouter(prefix="/api", tags=["definitions"])
@@ -27,6 +27,8 @@ def _definition_out(d: CollectionDefinition, colls: dict[tuple[int | None, str],
         "source_file": d.source_file,
         "builders": d.builders,
         "options": d.options,
+        # What a sync does when the definition doesn't say (charts replace, lists add).
+        "sync_mode": (d.options or {}).get("sync_mode") or default_sync_mode(d.builders or []),
         "unsupported": d.unsupported,
         "enabled": d.enabled,
         "check_result": d.check_result,

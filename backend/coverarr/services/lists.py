@@ -44,6 +44,15 @@ ID_BUILDERS = ("tmdb_movie", "tmdb_show")
 BUILDERS = (*LIST_BUILDERS, *ID_BUILDERS, *TMDB_CHARTS, *TRAKT_CHARTS)
 
 
+def default_sync_mode(builders: list[dict[str, Any]]) -> str:
+    """Charts change every day, so a collection of only charts replaces its titles ("sync");
+    anything else only adds ("append"), as in Kometa."""
+    charts = {*TMDB_CHARTS, *TRAKT_CHARTS}
+    if builders and all(b.get("type") in charts for b in builders):
+        return "sync"
+    return "append"
+
+
 def chart_limit(value: Any) -> int:
     """Kometa writes a chart's size as its value, e.g. ``tmdb_popular: 30``."""
     try:
