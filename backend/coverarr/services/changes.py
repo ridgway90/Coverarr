@@ -366,7 +366,8 @@ async def _labels_for(session: AsyncSession, items: list[Any]) -> dict[int, tupl
         while top.parent_id and top.parent_id in parents:
             top = parents[top.parent_id]
         if item.kind == "season":
-            title = f"{top.title} - Season {item.season_number}"
+            name = "Specials" if item.season_number == 0 else f"Season {item.season_number}"
+            title = f"{top.title}: {name}"
         elif item.kind == "episode":
             season = parents.get(item.parent_id) if item.parent_id else None
             s = (
