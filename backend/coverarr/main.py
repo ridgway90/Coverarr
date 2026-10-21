@@ -40,7 +40,7 @@ from coverarr.services.housekeeping import run_store_bases, run_tidy_assets
 from coverarr.services.importer import run_import, run_rematch
 from coverarr.services.jobs import JobRunner
 from coverarr.services.kometa import run_kometa_originals
-from coverarr.services.overlays import set_config_dir
+from coverarr.services.overlays import drop_old_render_folders, set_config_dir
 from coverarr.services.posters import ThumbnailCache, run_poster_scan
 from coverarr.services.refresh import (
     run_collection_remove,
@@ -67,6 +67,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
             app.state.secret_key = await ensure_secret(session, "secret_key")
         await relocate_artwork(sm, config.config_dir)
         set_config_dir(config.config_dir)
+        await asyncio.to_thread(drop_old_render_folders, config.config_dir)
         runner = JobRunner(sm)
         runner.register("import", run_import)
         runner.register("rematch", run_rematch)

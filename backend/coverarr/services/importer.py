@@ -49,11 +49,15 @@ ITEM_FIELDS = (
 )
 
 
-async def _auto_library(session: AsyncSession, server: Server, remote: RemoteLibrary) -> int:
+async def _auto_library(
+    session: AsyncSession, server: Server, remote: RemoteLibrary, guess: bool = True
+) -> int:
     """Pick the logical library for a newly seen server library.
 
     Same kind and name wins; otherwise, if exactly one library of that kind has nothing from
     this server yet (e.g. Plex "Films" vs Emby "Movies"), use it; else create a new one.
+    ``guess=False`` skips that second step (the server has several unmatched libraries of
+    this kind, so which is which can't be told).
     """
     libraries = list(await session.scalars(select(Library).where(Library.kind == remote.kind)))
     for lib in libraries:
@@ -65,7 +69,7 @@ async def _auto_library(session: AsyncSession, server: Server, remote: RemoteLib
         )
     )
     free = [lib for lib in libraries if lib.id not in used]
-    if len(free) == 1:
+    if guess and len(free) == 1:
         return free[0].id
     lib = Library(name=remote.name, kind=remote.kind)
     session.add(lib)
@@ -79,6 +83,16 @@ async def sync_libraries(
     """Upsert the server's libraries; return the enabled, mapped ones."""
     existing = {sl.remote_id: sl for sl in server.libraries}
     active: list[tuple[ServerLibrary, RemoteLibrary]] = []
+    # New libraries with a same-named match claim it first, so the "only free library"
+    # guess for the others can't take it from them (e.g. "Kids Movies" before "Movies").
+    names = {
+        (lib.kind, normalize_title(lib.name)) for lib in await session.scalars(select(Library))
+    }
+    unmatched: dict[str, int] = {}
+    for remote in remote_libs:
+        if remote.id not in existing and (remote.kind, normalize_title(remote.name)) not in names:
+            unmatched[remote.kind] = unmatched.get(remote.kind, 0) + 1
+    remote_libs = sorted(remote_libs, key=lambda r: (r.kind, normalize_title(r.name)) not in names)
     for remote in remote_libs:
         sl = existing.pop(remote.id, None)
         if sl is None:
@@ -87,7 +101,9 @@ async def sync_libraries(
                 remote_id=remote.id,
                 name=remote.name,
                 kind=remote.kind,
-                library_id=await _auto_library(session, server, remote),
+                library_id=await _auto_library(
+                    session, server, remote, guess=unmatched.get(remote.kind, 0) <= 1
+                ),
             )
             session.add(sl)
             await session.flush()

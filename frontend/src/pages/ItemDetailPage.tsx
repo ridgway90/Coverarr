@@ -32,6 +32,7 @@ export default function ItemDetailPage() {
       qc.invalidateQueries({ queryKey: ["issues"] });
       qc.invalidateQueries({ queryKey: ["review"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["changes"] });
     },
   });
 
@@ -102,6 +103,8 @@ export default function ItemDetailPage() {
         >
           {reload.job.status === "failed"
             ? reload.job.error
+            : reload.job.status === "cancelled"
+            ? "Refresh cancelled."
             : ((reload.job.result?.changes as string[] | undefined) ?? []).join(" · ") || "Refreshed."}
         </div>
       )}

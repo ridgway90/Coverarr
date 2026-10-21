@@ -222,6 +222,14 @@ export function Poster({
   );
 }
 
+/** Past the last page (rows were pushed, accepted or filtered away)? Go back to the last one. */
+export function useClampPage(page: number, data: { total: number; page_size: number } | undefined, setPage: (p: number) => void) {
+  const last = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1;
+  useEffect(() => {
+    if (data && page > last) setPage(last);
+  }, [data, page, last, setPage]);
+}
+
 export function Pagination({
   page,
   pageSize,

@@ -6,6 +6,7 @@ import {
   EmptyState,
   PageHeader,
   Pagination,
+  useClampPage,
   Poster,
   PresenceChips,
   Spinner,
@@ -15,7 +16,7 @@ import {
 } from "../components/ui";
 import { api, qs, type ItemSummary, type Page } from "../lib/api";
 import { useLibraries, useServerMap } from "../lib/hooks";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export const ISSUE_SHORT: Record<string, string> = {
   poster_differs: "Posters differ",
@@ -28,6 +29,16 @@ export default function LibraryPage() {
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState(params.get("q") ?? "");
   const q = useDebounced(search);
+
+  // Keep the search in the address, so Back (and a reload) comes back to the same list.
+  useEffect(() => {
+    if ((params.get("q") ?? "") === q) return;
+    const next = new URLSearchParams(params);
+    if (q) next.set("q", q);
+    else next.delete("q");
+    next.delete("page");
+    setParams(next, { replace: true });
+  }, [q]);
   const filter = params.get("filter") ?? "";
   const page = Number(params.get("page") ?? 1);
   const letter = params.get("letter") ?? "";
@@ -61,6 +72,7 @@ export default function LibraryPage() {
       ),
     placeholderData: keepPreviousData,
   });
+  useClampPage(page, data, (p) => setParam("page", p > 1 ? String(p) : ""));
 
   return (
     <>

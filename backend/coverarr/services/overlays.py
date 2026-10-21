@@ -25,6 +25,8 @@ import os
 import re
 import shutil
 import tempfile
+import threading
+import uuid
 import zipfile
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -86,7 +88,9 @@ class OverlaySetup:
         key = (
             level,
             id(layers),
-            resolution_key(f),
+            # The names a badge is looked up by, not just the key: two titles with one key
+            # can fall back to different badges.
+            tuple(_resolution_names(f)),
             edition_key(f.get("edition")),
             f.get("network"),
         )
@@ -503,7 +507,8 @@ def render_to_file(
     from coverarr.services.posters import fingerprints
 
     data = render_image(base, size, layers)
-    tmp = f"{dest}.tmp{os.getpid()}"
+    # Unique per call: previews render in threads of one process, and may race for one file.
+    tmp = f"{dest}.tmp{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex[:8]}"
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     with open(tmp, "wb") as fh:
         fh.write(data)
@@ -511,9 +516,21 @@ def render_to_file(
     return fingerprints(data)
 
 
+def drop_old_render_folders(config_dir: Path) -> None:
+    """Renders used to go in 9 folders ("m1".."m9"); they're re-rendered on demand now."""
+    root = config_dir / "cache" / "rendered"
+    if root.is_dir():
+        for folder in root.iterdir():
+            if folder.is_dir() and len(folder.name) == 2 and folder.name.startswith("m"):
+                shutil.rmtree(folder, ignore_errors=True)
+
+
 def plan_args(plan: RenderPlan) -> list[tuple[str, Any]]:
     return [(layer.path, layer.placement) for layer in plan.layers]
 
 
 def rendered_path(config_dir: Path, owner: str, key: str) -> Path:
-    return config_dir / "cache" / "rendered" / owner[:2] / f"{owner}-{key}.jpg"
+    # 256 folders by id, so no folder grows past a few hundred titles' renders.
+    digits = "".join(c for c in owner if c.isdigit())
+    bucket = f"{int(digits) % 256:02x}" if digits else owner[:2]
+    return config_dir / "cache" / "rendered" / bucket / f"{owner}-{key}.jpg"

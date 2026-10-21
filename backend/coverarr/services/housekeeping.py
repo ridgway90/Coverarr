@@ -595,7 +595,12 @@ async def run_tidy_assets(ctx: JobContext) -> dict[str, Any]:
                 out.append(Path(dirpath) / name)
         return out
 
-    for path in await asyncio.to_thread(walk):
+    found = await asyncio.to_thread(walk)
+    if apply:
+        # Uploads saved during the walk weren't in ``known`` yet: ask again before deleting.
+        async with sm() as session:
+            known |= {p for (p,) in (await session.execute(select(Artwork.file_path))).all()}
+    for path in found:
         rel = str(path.relative_to(config_dir))
         if rel not in known:
             report["unused_files"].append(rel)

@@ -149,7 +149,11 @@ def _prune(config_dir: Path, folder: Path) -> None:
 
 
 async def taken_paths(session: AsyncSession) -> dict[str, str]:
-    return {art.file_path: owner_key(art) for art in await session.scalars(select(Artwork))}
+    """Every stored file -> its owner (just the columns: this runs on each upload)."""
+    rows = await session.execute(
+        select(Artwork.file_path, Artwork.media_item_id, Artwork.collection_id)
+    )
+    return {row.file_path: owner_key(row) for row in rows}
 
 
 async def relocate_artwork(
@@ -167,7 +171,9 @@ async def relocate_artwork(
             [a.media_item_id for a in arts if a.media_item_id],
             [a.collection_id for a in arts if a.collection_id],
         )
-        taken: dict[str, str] = {}
+        # Start from where every file is now, so a move never lands on a file another
+        # title still uses (it gets a "[c12]" folder instead, and moves on a later tidy).
+        taken = {art.file_path: owner_key(art) for art in arts}
         moved = 0
         for art in arts:
             key = owner_key(art)
@@ -175,6 +181,8 @@ async def relocate_artwork(
                 continue
             folder, stem = owners[key]
             suffix = PurePosixPath(art.file_path).suffix.lstrip(".") or "jpg"
+            if taken.get(art.file_path) == key:
+                del taken[art.file_path]
             new = artwork_path(key, folder, stem, art.source, suffix, taken)
             if str(new) == art.file_path:
                 continue

@@ -8,6 +8,7 @@ import uuid
 import zipfile
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -19,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from coverarr.api.kometa import _save_upload
 from coverarr.db import get_session
 from coverarr.models import Artwork, Library, MediaItem, Server, ServerItem
-from coverarr.services import overlay_slots
+from coverarr.services import cpu, overlay_slots
 from coverarr.services.changes import plan_item
 from coverarr.services.mediainfo import RANK
 from coverarr.services.overlays import (
@@ -225,7 +226,9 @@ async def preview_item(
     w: int = Query(400, ge=50, le=2000),
     session: AsyncSession = Depends(get_session),
 ):
-    """This title's poster with its overlays, as it would be pushed (cached by render key)."""
+    """This title's poster with its overlays, as it would be pushed (cached by render key).
+    Renders on the worker processes, a few at a time, so a page of previews can't starve
+    the API."""
     change = await plan_item(session, media_item_id)
     if change is None or change.render is None:
         raise HTTPException(404, change.problem if change else "No overlays for this title")
@@ -233,13 +236,25 @@ async def preview_item(
     dest = rendered_path(_config_dir(request), f"m{media_item_id}", render.key)
     if not await asyncio.to_thread(dest.is_file):
         base = await _base_bytes(request, session, render.base)
-        await asyncio.to_thread(
-            render_to_file, base, render.plan.size, plan_args(render.plan), str(dest)
-        )
+        async with _preview_slots():
+            if not await asyncio.to_thread(dest.is_file):
+                await cpu.run(
+                    render_to_file, base, render.plan.size, plan_args(render.plan), str(dest)
+                )
     path = await request.app.state.thumbs.get_local(f"rendered:{dest.name}", dest, w)
     return FileResponse(
         path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=604800"}
     )
+
+
+_preview_lock: asyncio.Semaphore | None = None
+
+
+def _preview_slots() -> asyncio.Semaphore:
+    global _preview_lock
+    if _preview_lock is None:
+        _preview_lock = asyncio.Semaphore(cpu.workers())
+    return _preview_lock
 
 
 class PreviewRequest(BaseModel):
@@ -272,7 +287,8 @@ async def preview_layers(
         media_type="image/jpeg",
         headers={
             "Cache-Control": "no-store",
-            "X-Overlay-Missing": ", ".join(change.render.plan.missing)[:500],
+            # Network names can be in any script; headers are latin-1 only.
+            "X-Overlay-Missing": quote(", ".join(change.render.plan.missing)[:500]),
         },
     )
 

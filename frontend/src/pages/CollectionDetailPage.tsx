@@ -25,7 +25,7 @@ export default function CollectionDetailPage() {
     queryFn: () => api.get<CollectionDetail>(`/api/collections/${collectionId}`),
   });
   const refresh = () => {
-    for (const key of ["collection", "collections", "issues", "review", "dashboard"]) qc.invalidateQueries({ queryKey: [key] });
+    for (const key of ["collection", "collections", "issues", "review", "dashboard", "changes"]) qc.invalidateQueries({ queryKey: [key] });
   };
   const choose = useMutation({
     mutationFn: (source: string | null) => api.put(`/api/collections/${collectionId}/poster-source`, { poster_source: source }),

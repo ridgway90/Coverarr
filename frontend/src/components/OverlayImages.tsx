@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Images, Plus, Trash2, Upload } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, qs, uploadWithProgress } from "../lib/api";
 import { Button, Card, ErrorNote, Modal, Spinner, Tabs, cx, inputClass, selectClass } from "./ui";
 
@@ -249,6 +249,9 @@ function BulkUpload({
   onDone: () => void;
 }) {
   const [rows, setRows] = useState(items);
+  // One preview URL per file, freed when the dialog closes.
+  const previews = useMemo(() => items.map((r) => URL.createObjectURL(r.file)), [items]);
+  useEffect(() => () => previews.forEach((url) => URL.revokeObjectURL(url)), [previews]);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const chosen = rows.filter((r) => r.path);
@@ -290,7 +293,7 @@ function BulkUpload({
       <ul className="space-y-2">
         {rows.map((row, i) => (
           <li key={i} className="flex flex-wrap items-center gap-3">
-            <img src={URL.createObjectURL(row.file)} alt="" className="checkerboard h-10 w-16 rounded border border-line object-contain" />
+            <img src={previews[i]} alt="" className="checkerboard h-10 w-16 rounded border border-line object-contain" />
             <span className="min-w-0 flex-1 truncate text-sm" title={row.file.name}>
               {row.file.name}
             </span>

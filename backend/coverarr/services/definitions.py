@@ -134,18 +134,20 @@ async def resolve_definition(
                 resolved.errors.append(str(exc))
     if library is None:
         return resolved
-    rows = (
-        await session.execute(
-            select(MediaItem.id, MediaItem.tmdb_id, MediaItem.imdb_id, MediaItem.tvdb_id).where(
-                MediaItem.library_id == library.id, MediaItem.kind == library.kind
+    index = lists.library_index.get(library.id)
+    if index is None:
+        rows = (
+            await session.execute(
+                select(MediaItem.id, MediaItem.tmdb_id, MediaItem.imdb_id, MediaItem.tvdb_id).where(
+                    MediaItem.library_id == library.id, MediaItem.kind == library.kind
+                )
             )
-        )
-    ).all()
-    index: dict[str, int] = {}
-    for mi, tmdb, imdb, tvdb in rows:
-        for prefix, value in (("tmdb", tmdb), ("imdb", imdb), ("tvdb", tvdb)):
-            if value:
-                index.setdefault(f"{prefix}:{value}", mi)
+        ).all()
+        index = lists.library_index[library.id] = {}
+        for mi, tmdb, imdb, tvdb in rows:
+            for prefix, value in (("tmdb", tmdb), ("imdb", imdb), ("tvdb", tvdb)):
+                if value:
+                    index.setdefault(f"{prefix}:{value}", mi)
     for key, entry in resolved.entries.items():
         for candidate in (
             f"tmdb:{entry.tmdb_id}" if entry.tmdb_id else None,
@@ -349,15 +351,15 @@ async def sync_definition(
                     continue
                 else:
                     current = list(sc.member_remote_ids or [])
-                    add = [r for r in remote_wanted if r not in set(current)]
-                    remove = (
-                        [r for r in current if r not in set(remote_wanted)] if can_remove else []
-                    )
+                    have, want = set(current), set(remote_wanted)
+                    add = [r for r in remote_wanted if r not in have]
+                    remove = [r for r in current if r not in want] if can_remove else []
                     if add:
                         await client.add_to_collection(library, sc.remote_id, add)
                     if remove:
                         await client.remove_from_collection(sl.remote_id, sc.remote_id, remove)
-                    sc.member_remote_ids = [r for r in current if r not in set(remove)] + add
+                    dropped = set(remove)
+                    sc.member_remote_ids = [r for r in current if r not in dropped] + add
                     outcome["added"], outcome["removed"] = len(add), len(remove)
                 # Members are in by now: a failure here only costs the sort title/order.
                 try:

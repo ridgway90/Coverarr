@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, CheckCircle2, Search, Trash2, Upload } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import CancelJob from "../components/CancelJob";
 import {
@@ -10,6 +10,7 @@ import {
   ErrorNote,
   PageHeader,
   Pagination,
+  useClampPage,
   Poster,
   ServerChip,
   Spinner,
@@ -43,6 +44,16 @@ export default function ChangesPage() {
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState(params.get("q") ?? "");
   const q = useDebounced(search);
+
+  // Keep the search in the address, so Back (and a reload) comes back to the same list.
+  useEffect(() => {
+    if ((params.get("q") ?? "") === q) return;
+    const next = new URLSearchParams(params);
+    if (q) next.set("q", q);
+    else next.delete("q");
+    next.delete("page");
+    setParams(next, { replace: true });
+  }, [q]);
   const libraryId = params.get("library") ?? "";
   const target = params.get("target") ?? "";
   const page = Number(params.get("page") ?? 1);
@@ -65,6 +76,7 @@ export default function ChangesPage() {
       ),
     placeholderData: keepPreviousData,
   });
+  useClampPage(page, data, (p) => setParam("page", p > 1 ? String(p) : ""));
   const summary = useChangesSummary();
 
   const push = useJobAction((body: Targets) => api.post<{ job_id: number }>("/api/changes/push", body), [

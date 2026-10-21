@@ -283,6 +283,15 @@ def _assess_overlay(
 ) -> None:
     """Like ``_assess``, for a title that gets overlays."""
     kind, _, ref = change.source.partition(":") if change.source else ("", "", "")
+    if not kind:
+        # Every server may show Coverarr's render (e.g. after a Discard); the clean poster
+        # kept on the first push is still a base.
+        clean = [r for r in rows if r.poster_ref and not _has_overlay(r) and not _shows_render(r)]
+        kept = [
+            a for a in artworks.values() if a.source == "original" and a.media_item_id == change.id
+        ]
+        if not clean and kept:
+            kind, ref = "artwork", str(max(kept, key=lambda a: a.id).id)
     if kind == "artwork":
         art = artworks.get(int(ref)) if ref.isdigit() else None
         if art is None:
@@ -496,6 +505,7 @@ async def _artworks(session: AsyncSession, owner_filter: Any) -> dict[int, Any]:
             Artwork.poster_hash,
             Artwork.poster_edges,
             Artwork.created_at,
+            Artwork.media_item_id,
         ).where(owner_filter)
     )
     return {a.id: a for a in rows}
@@ -656,8 +666,8 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
                 counts["rendered"] += 1
             return data, fingerprint, f"r:{key}"
 
-        async def push(change: Change) -> list[tuple[ServerChange, str | None, str, str]]:
-            """(server change, new ref, fingerprint, pushed key) for each upload that worked."""
+        async def push(change: Change) -> None:
+            """Upload one title's poster to each server that needs it."""
             if change.render is not None:
                 data, fingerprint, pushed_key = await rendered(change)
             else:
@@ -667,33 +677,41 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
                 pushed_key = f"b:{change.source}"
             content_type = await asyncio.to_thread(_content_type, data)
 
-            async def upload(sc: ServerChange):
+            async def upload(sc: ServerChange) -> bool:
                 try:
                     new_ref = await clients[sc.server_id].upload_poster(
                         sc.remote_id, data, content_type
                     )
-                    return sc, new_ref, fingerprint, pushed_key
                 except MediaServerError as exc:
                     counts["failed"] += 1
                     await ctx.log(f"{servers[sc.server_id].name}: {change.title}: {exc}")
-                    return None
+                    return False
+                # Noted straight away, so a cancel never forgets an upload that happened.
+                uploaded.append((change.target, sc.row_id, new_ref, fingerprint, pushed_key))
+                return True
 
-            results = await asyncio.gather(*(upload(sc) for sc in change.servers))
-            return [r for r in results if r]
+            if all(await asyncio.gather(*(upload(sc) for sc in change.servers))):
+                counts["pushed"] += 1
 
-        chunk = max(CHUNK, cpu.workers() * 4)
-        for start in range(0, len(changes), chunk):
-            batch = changes[start : start + chunk]
-            results = await asyncio.gather(*(push(c) for c in batch), return_exceptions=True)
+        uploaded: list[tuple[str, int, str | None, tuple[str, str], str]] = []
+
+        async def record() -> None:
+            """Write the uploads noted so far, a whole batch per query."""
+            if not uploaded:
+                return
+            batch = list(uploaded)
+            uploaded.clear()
             async with write_lock, sm() as session:
-                for change, result in zip(batch, results, strict=True):
-                    if isinstance(result, BaseException):
-                        counts["failed"] += len(change.servers)
-                        await ctx.log(f"{change.title}: {result}")
+                for target, model in (("item", ServerItem), ("collection", ServerCollection)):
+                    mine = [u for u in batch if u[0] == target]
+                    if not mine:
                         continue
-                    model = ServerItem if change.target == "item" else ServerCollection
-                    for sc, new_ref, fingerprint, pushed_key in result:
-                        row = await session.get(model, sc.row_id)
+                    found = await session.scalars(
+                        select(model).where(model.id.in_({u[1] for u in mine}))
+                    )
+                    rows = {row.id: row for row in found}
+                    for _, row_id, new_ref, fingerprint, pushed_key in mine:
+                        row = rows.get(row_id)
                         if row is None:
                             continue
                         row.poster_ref = new_ref or row.poster_ref
@@ -704,11 +722,33 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
                             label for label in row.labels or [] if str(label).lower() != "overlay"
                         ]
                         counts["uploaded"] += 1
-                    if result and len(result) == len(change.servers):
-                        counts["pushed"] += 1
                 await session.commit()
-            done += len(batch)
-            await ctx.progress(0.98 * done / max(len(changes), 1), f"Pushed {done}/{len(changes)}")
+
+        # A pool of workers takes the next title as each finishes, so one slow upload
+        # doesn't hold up the rest.
+        width = max(CHUNK, cpu.workers() * 4)
+        queue = iter(changes)
+
+        async def worker() -> None:
+            nonlocal done
+            for change in queue:
+                try:
+                    await push(change)
+                except Exception as exc:
+                    counts["failed"] += len(change.servers)
+                    await ctx.log(f"{change.title}: {exc}")
+                done += 1
+                if len(uploaded) >= width:
+                    await record()
+                if done % 10 == 0 or done == len(changes):
+                    await ctx.progress(
+                        0.98 * done / max(len(changes), 1), f"Pushed {done}/{len(changes)}"
+                    )
+
+        try:
+            await asyncio.gather(*(worker() for _ in range(min(width, len(changes)))))
+        finally:
+            await asyncio.shield(record())
 
     from coverarr.services.review import refresh_issues
 
