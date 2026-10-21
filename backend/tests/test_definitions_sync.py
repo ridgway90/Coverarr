@@ -100,7 +100,11 @@ async def test_define_sync_reorder_and_trim(app, authed, fake_servers):
                 {"type": "tmdb_movie", "value": "https://www.themoviedb.org/movie/747-shaun"},
                 {"type": "tmdb_movie", "value": 4638},
             ],
-            "options": {"collection_order": "custom", "summary": "Cornetto and friends"},
+            "options": {
+                "collection_order": "custom",
+                "summary": "Cornetto and friends",
+                "sort_title": "!01 Edgar Wright",
+            },
         },
     )
     assert resp.status_code == 200, resp.text
@@ -116,6 +120,7 @@ async def test_define_sync_reorder_and_trim(app, authed, fake_servers):
             coll = _coll(srv, "Edgar Wright")
             assert _titles(srv, coll) == ["Shaun of the Dead", "Hot Fuzz"]
             assert coll.summary == "Cornetto and friends"
+            assert coll.sort_title == "!01 Edgar Wright"
         assert _coll(fake_servers["plex"], "Edgar Wright").order == "2"  # custom
         assert any("custom order" in n for n in synced["sync_result"]["notes"])
 

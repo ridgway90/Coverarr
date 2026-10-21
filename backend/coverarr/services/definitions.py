@@ -352,18 +352,23 @@ async def sync_definition(
                         await client.remove_from_collection(sl.remote_id, sc.remote_id, remove)
                     sc.member_remote_ids = [r for r in current if r not in set(remove)] + add
                     outcome["added"], outcome["removed"] = len(add), len(remove)
-                notes = await client.update_collection(
-                    sl.remote_id,
-                    sc.remote_id,
-                    sort_title=coll.sort_title,
-                    summary=coll.summary,
-                    order=order,
-                    member_order=remote_wanted if order == "custom" else None,
-                )
-                if coll.sort_title:
-                    sc.sort_title = coll.sort_title
-                if coll.summary:
-                    sc.summary = coll.summary
+                # Members are in by now: a failure here only costs the sort title/order.
+                try:
+                    notes = await client.update_collection(
+                        sl.remote_id,
+                        sc.remote_id,
+                        sort_title=coll.sort_title,
+                        summary=coll.summary,
+                        order=order,
+                        member_order=remote_wanted if order == "custom" else None,
+                    )
+                except MediaServerError as exc:
+                    notes = [f"couldn't set the sort title, summary or order: {exc}"]
+                else:
+                    if coll.sort_title:
+                        sc.sort_title = coll.sort_title
+                    if coll.summary:
+                        sc.summary = coll.summary
                 result["notes"] += [f"{server.name}: {n}" for n in notes]
         except MediaServerError as exc:
             outcome["error"] = str(exc)

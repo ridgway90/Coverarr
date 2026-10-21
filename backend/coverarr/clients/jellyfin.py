@@ -296,21 +296,25 @@ class JellyfinClient(MediaServerClient):
     ) -> list[str]:
         uid = await self.user_id()
         item = await self._json("GET", f"/Users/{uid}/Items/{collection_id}")
-        locked = set(item.get("LockedFields") or [])
+        before = dict(item)
+        locked = list(item.get("LockedFields") or [])
         if sort_title is not None:
+            # A forced sort name stays put by itself; "SortName" isn't a lockable field
+            # (only Name, Overview, Genres... are), and the server rejects the whole update.
             item["SortName"] = item["ForcedSortName"] = sort_title
-            locked.add("SortName")
         if summary is not None:
             item["Overview"] = summary
-            locked.add("Overview")
+            if "Overview" not in locked:
+                locked.append("Overview")
         notes = []
         if order in ("release", "alpha"):
             item["DisplayOrder"] = "PremiereDate" if order == "release" else "SortName"
         elif order == "custom":
             notes.append(f"{self.kind} collections can't keep a custom order; sorted by name")
             item["DisplayOrder"] = "SortName"
-        item["LockedFields"] = sorted(locked)
-        await self._request("POST", f"/Items/{collection_id}", json=item)
+        item["LockedFields"] = locked
+        if item != before:
+            await self._request("POST", f"/Items/{collection_id}", json=item)
         return notes
 
     async def recent_items(
