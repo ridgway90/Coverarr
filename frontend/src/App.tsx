@@ -17,6 +17,7 @@ import OverlaysPage from "./pages/OverlaysPage";
 import LibraryPage from "./pages/LibraryPage";
 import ReviewPage from "./pages/ReviewPage";
 import SettingsPage from "./pages/SettingsPage";
+import TraktCallbackPage from "./pages/TraktCallbackPage";
 
 export default function App() {
   const qc = useQueryClient();
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="housekeeping" element={<HousekeepingPage />} />
         <Route path="jobs" element={<JobsPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="trakt/callback" element={<TraktCallbackPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

@@ -24,6 +24,7 @@ from coverarr.api import (
     review,
     servers,
     settings,
+    trakt,
 )
 from coverarr.config import Settings, get_settings
 from coverarr.db import dispose_engine, init_engine, run_migrations, session_factory
@@ -123,6 +124,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
         housekeeping,
         automation,
         definitions,
+        trakt,
     ):
         app.include_router(module.router, dependencies=protected)
 
