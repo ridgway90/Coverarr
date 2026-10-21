@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -78,10 +79,19 @@ class ListClient:
         await self.aclose()
 
     async def _get(self, url: str, **kwargs) -> httpx.Response:
-        try:
-            resp = await self._http.get(url, **kwargs)
-        except httpx.HTTPError as exc:
-            raise ListError(f"{url}: {exc}") from exc
+        # Rate limited (429) or a passing server error: wait and try again a few times.
+        for attempt in range(4):
+            try:
+                resp = await self._http.get(url, **kwargs)
+            except httpx.HTTPError as exc:
+                raise ListError(f"{url}: {exc}") from exc
+            if resp.status_code not in (429, 502, 503, 504) or attempt == 3:
+                break
+            try:
+                wait = float(resp.headers.get("Retry-After", ""))
+            except ValueError:
+                wait = 0.0
+            await asyncio.sleep(min(max(wait, 1.0 * 2**attempt), 30.0))
         if resp.status_code == 401:
             raise ListError(f"{url}: API key rejected")
         if resp.status_code == 404:

@@ -36,6 +36,12 @@ possible: it tracks what each server already has and only touches what actually 
   such as a set you've downloaded from ThePosterDB: `Hot Fuzz (2007).jpg`,
   `Cornetto Collection.jpg`, `Spaced (1999) - Season 1.jpg`. ThePosterDB has no API and its
   terms forbid automated downloads, so download the set yourself and import the zip.
+- **Reset posters from TMDb** (Settings → Reset posters): replaces base posters with TMDb's
+  main English poster for every film, show, season and collection (or one library). By default
+  your uploads and poster-set imports are kept; you can also limit it to titles without a base.
+  Films need a TMDb id, shows are matched by TMDb, TVDB or IMDb id, collections by name.
+  Nothing reaches your servers until you push from *Changes*; overlays are drawn on the new
+  posters if switched on.
 - **A–Z bar** on films, TV and collections ("The"/"A"/"An" are skipped, so *The Holiday* is
   under H).
 - **Overlays** (sidebar → Overlays). Upload an overlay pack once (e.g. the jmxd zip; it's

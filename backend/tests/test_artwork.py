@@ -301,3 +301,84 @@ async def test_season_posters(app, authed, fake_servers):
     plex_season = next(i for i in plex.items.values() if i.parent == plex_show.id and i.index == 1)
     assert plex_season.uploaded is not None
     assert ids  # all three servers took it
+
+
+async def test_reset_from_tmdb(app, authed, fake_servers):
+    import httpx
+
+    client = authed
+    await add_servers(client)
+    await run_job(app, client, "import")
+    films, _ = await _libs(client)
+    hot_fuzz = await _item(client, films["id"], "Hot Fuzz")
+    await client.post(
+        f"/api/items/{hot_fuzz['id']}/artwork",
+        files={"file": ("mine.png", poster_png("my hot fuzz"), "image/png")},
+    )
+    await client.put("/api/settings", json={"tmdb_api_key": "0123456789abcdef0123456789abcdef"})
+
+    def movie(request):
+        tmdb_id = request.url.path.rsplit("/", 1)[1]
+        # Elf has no poster on TMDb.
+        return httpx.Response(
+            200, json={"poster_path": None if tmdb_id == "10719" else f"/m{tmdb_id}.jpg"}
+        )
+
+    def search(request):
+        name = request.url.params["query"]
+        results = (
+            [{"id": 9436, "name": name, "poster_path": "/c.jpg"}] if "Cornetto" in name else []
+        )
+        return httpx.Response(200, json={"results": results})
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get(url__regex=r"https://api\.themoviedb\.org/3/movie/\d+").mock(side_effect=movie)
+        mock.get("https://api.themoviedb.org/3/find/75592").respond(
+            json={"tv_results": [{"id": 4228}]}
+        )
+        mock.get("https://api.themoviedb.org/3/find/72216").respond(
+            json={"tv_results": [{"id": 1234}]}
+        )
+        mock.get(url__regex=r"https://api\.themoviedb\.org/3/tv/\d+/season/\d+").respond(
+            json={"poster_path": "/season.jpg"}
+        )
+        mock.get(url__regex=r"https://api\.themoviedb\.org/3/tv/\d+(\?|$)").respond(
+            json={"poster_path": "/show.jpg"}
+        )
+        mock.get("https://api.themoviedb.org/3/search/collection").mock(side_effect=search)
+        mock.get(url__regex=r"https://image\.tmdb\.org/t/p/original/.*").respond(
+            content=_jpeg("tmdb poster"), headers={"Content-Type": "image/jpeg"}
+        )
+        resp = await client.post("/api/posters/reset-from-tmdb", json={})
+        assert resp.status_code == 200, resp.text
+        await app.state.jobs.wait_idle()
+        job = (await client.get(f"/api/jobs/{resp.json()['job_id']}")).json()
+        assert job["status"] == "succeeded", job
+        r = job["result"]
+        # 12 film entries (with Plex's mismatched "9 Songs") minus Hot Fuzz (your upload is
+        # kept), Elf (no poster on TMDb) and Family Holiday (no TMDb id) = 9; three
+        # collections TMDb doesn't have aren't found.
+        assert "Elf" in r["not_found"] and "Family Holiday 2019" in r["not_found"]
+        assert "Comfort J Films" in r["not_found"]
+        assert r["replaced"] == 9 + 2 + 5 + 1  # films, shows, seasons, Cornetto
+
+        home_alone = (
+            await client.get(f"/api/items/{(await _item(client, films['id'], 'Home Alone'))['id']}")
+        ).json()
+        chosen = int(home_alone["poster_source"].split(":")[1])
+        assert {a["artwork_id"]: a["source"] for a in home_alone["artwork"]}[chosen] == "tmdb"
+        kept = (await client.get(f"/api/items/{hot_fuzz['id']}")).json()
+        assert {a["artwork_id"]: a["source"] for a in kept["artwork"]}[
+            int(kept["poster_source"].split(":")[1])
+        ] == "upload"
+
+        # Only titles without a base: everything found has one now.
+        resp = await client.post("/api/posters/reset-from-tmdb", json={"only_missing": True})
+        await app.state.jobs.wait_idle()
+        job = (await client.get(f"/api/jobs/{resp.json()['job_id']}")).json()
+        assert job["result"].get("replaced", 0) == 0
+
+    bad = await client.post(
+        "/api/posters/reset-from-tmdb", json={"kinds": [], "collections": False}
+    )
+    assert bad.status_code == 422

@@ -57,6 +57,7 @@ export const JOB_LABELS: Record<string, string> = {
   poster_set: "Import poster set",
   store_bases: "Store base posters",
   tidy_assets: "Tidy stored posters",
+  tmdb_reset: "Reset posters from TMDb",
 };
 
 export function jobLabel(job: Pick<Job, "kind">): string {

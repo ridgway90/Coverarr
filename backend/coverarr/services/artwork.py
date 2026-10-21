@@ -417,3 +417,188 @@ async def run_poster_set(ctx: JobContext) -> dict[str, Any]:
         await ctx.log("No match for: " + ", ".join(unmatched[:30]))
     await ctx.progress(1.0, "Poster set imported")
     return {**counts, "unmatched_files": unmatched[:100]}
+
+
+# --- resetting posters from TMDb -------------------------------------------------------------
+
+
+async def _tmdb_main_poster(
+    client: ListClient, target: Any, show: Any | None, tv_ids: dict[int, str | None]
+) -> str | None:
+    """TMDb's main (English) poster path for a film, show, season or collection."""
+    if target.kind == "collection":
+        found = await client.tmdb_json("/search/collection", query=target.title)
+        wanted = normalize_collection_name(target.title)
+        results = found.get("results") or []
+        best = next(
+            (r for r in results if normalize_collection_name(r.get("name")) == wanted), None
+        )
+        return (best or {}).get("poster_path")
+    if target.kind == "movie":
+        if not target.tmdb_id:
+            return None
+        data = await client.tmdb_json(f"/movie/{target.tmdb_id}", language="en")
+        return data.get("poster_path")
+    owner = target if target.kind == "show" else show
+    if owner is None:
+        return None
+    if owner.id not in tv_ids:
+        tv_ids[owner.id] = await _tmdb_tv_id(client, owner)
+    tv_id = tv_ids[owner.id]
+    if tv_id is None:
+        return None
+    if target.kind == "show":
+        data = await client.tmdb_json(f"/tv/{tv_id}", language="en")
+    else:
+        data = await client.tmdb_json(
+            f"/tv/{tv_id}/season/{target.season_number or 0}", language="en"
+        )
+    return data.get("poster_path")
+
+
+@dataclass
+class _ResetTarget:
+    kind: str
+    id: int
+    title: str
+    tmdb_id: str | None = None
+    tvdb_id: str | None = None
+    imdb_id: str | None = None
+    season_number: int | None = None
+    parent_id: int | None = None
+
+
+async def run_tmdb_reset(ctx: JobContext) -> dict[str, Any]:
+    """Replace base posters with TMDb's main poster for each title, season and collection."""
+    from sqlalchemy import or_
+
+    config_dir = Path(ctx.params["config_dir"])
+    library_id = ctx.params.get("library_id")
+    kinds = [k for k in ctx.params.get("kinds", ["movie", "show", "season"]) if k in KINDS]
+    do_collections = bool(ctx.params.get("collections", True))
+    keep_own = bool(ctx.params.get("keep_own", True))
+    only_missing = bool(ctx.params.get("only_missing", False))
+
+    async with ctx.sessionmaker() as session:
+        own = {
+            f"artwork:{a}"
+            for (a,) in (
+                await session.execute(
+                    select(Artwork.id).where(Artwork.source.in_(("upload", "set")))
+                )
+            ).all()
+        }
+
+        def keep(source: str | None) -> bool:
+            return bool(source) and (only_missing or (keep_own and source in own))
+
+        targets: list[_ResetTarget] = []
+        shows: dict[int, _ResetTarget] = {}
+        if kinds:
+            query = select(MediaItem).where(MediaItem.kind.in_(kinds))
+            if library_id is not None:
+                query = query.where(MediaItem.library_id == library_id)
+            for m in await session.scalars(query):
+                if keep(m.poster_source):
+                    continue
+                targets.append(
+                    _ResetTarget(
+                        m.kind,
+                        m.id,
+                        m.title,
+                        m.tmdb_id,
+                        m.tvdb_id,
+                        m.imdb_id,
+                        m.season_number,
+                        m.parent_id,
+                    )
+                )
+            parent_ids = {t.parent_id for t in targets if t.kind == "season" and t.parent_id}
+            if parent_ids:
+                for m in await session.scalars(
+                    select(MediaItem).where(MediaItem.id.in_(list(parent_ids)))
+                ):
+                    shows[m.id] = _ResetTarget(
+                        m.kind, m.id, m.title, m.tmdb_id, m.tvdb_id, m.imdb_id
+                    )
+        if do_collections:
+            query = select(Collection)
+            if library_id is not None:
+                query = query.where(
+                    or_(Collection.library_id == library_id, Collection.library_id.is_(None))
+                )
+            for c in await session.scalars(query):
+                if not keep(c.poster_source):
+                    targets.append(_ResetTarget("collection", c.id, c.name))
+        client = await _list_client(session)
+
+    await ctx.log(f"{len(targets)} posters to fetch from TMDb")
+    counts: dict[str, int] = defaultdict(int)
+    missing: list[str] = []
+    tv_ids: dict[int, str | None] = {}
+    lock = asyncio.Lock()
+    limit = asyncio.Semaphore(8)
+    done = 0
+
+    async def one(t: _ResetTarget) -> None:
+        nonlocal done
+        async with limit:
+            try:
+                path = await _tmdb_main_poster(
+                    client, t, shows.get(t.parent_id) if t.parent_id else None, tv_ids
+                )
+                data = await client.download(f"{TMDB_IMAGES}/original{path}") if path else None
+            except ListError as exc:
+                if "API key" in str(exc):
+                    raise
+                counts["failed"] += 1
+                await ctx.log(f"{t.title}: {exc}")
+                return
+        if data is None:
+            counts["not_on_tmdb"] += 1
+            if len(missing) < 200:
+                missing.append(t.title)
+            return
+        async with lock, ctx.sessionmaker() as session:
+            try:
+                await save_artwork(
+                    session,
+                    config_dir,
+                    source="tmdb",
+                    data=data,
+                    name=path.lstrip("/"),
+                    media_item_id=t.id if t.kind != "collection" else None,
+                    collection_id=t.id if t.kind == "collection" else None,
+                    choose=True,
+                )
+                await session.commit()
+                counts["replaced"] += 1
+            except ArtworkError as exc:
+                counts["failed"] += 1
+                await ctx.log(f"{t.title}: {exc}")
+        done += 1
+        if done % 20 == 0:
+            await ctx.progress(0.98 * done / max(len(targets), 1), f"Fetched {done}/{len(targets)}")
+
+    async with client:
+        # Shows before their seasons, so each show's TMDb id is looked up once.
+        targets.sort(key=lambda t: (t.kind == "season", t.title.lower()))
+        for start in range(0, len(targets), 200):
+            await asyncio.gather(*(one(t) for t in targets[start : start + 200]))
+
+    from coverarr.services.review import refresh_issues
+
+    async with ctx.sessionmaker() as session:
+        await refresh_issues(session)
+        await session.commit()
+    await ctx.progress(1.0, "Posters reset from TMDb")
+    await ctx.log(
+        f"Replaced {counts['replaced']} posters; {counts['not_on_tmdb']} not found on TMDb"
+        + (f"; {counts['failed']} failed" if counts["failed"] else "")
+    )
+    if missing:
+        await ctx.log("Not on TMDb: " + ", ".join(missing[:30]))
+    return {"total": len(targets), **counts, "not_found": missing}
+
+
+KINDS = ("movie", "show", "season")
