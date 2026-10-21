@@ -60,6 +60,8 @@ export const JOB_LABELS: Record<string, string> = {
   tmdb_reset: "Reset posters from TMDb",
 };
 
+const FINISHED: Job["status"][] = ["succeeded", "failed", "cancelled"];
+
 export function jobLabel(job: Pick<Job, "kind">): string {
   return JOB_LABELS[job.kind] ?? job.kind;
 }
@@ -76,9 +78,9 @@ export function useJobAction<T>(start: (arg: T) => Promise<{ job_id: number }>, 
     queryKey: ["jobs", jobId],
     queryFn: () => api.get<Job>(`/api/jobs/${jobId}`),
     enabled: jobId !== null,
-    refetchInterval: (q) => (q.state.data && ["succeeded", "failed"].includes(q.state.data.status) ? false : 800),
+    refetchInterval: (q) => (q.state.data && FINISHED.includes(q.state.data.status) ? false : 800),
   });
-  const finished = Boolean(job.data && ["succeeded", "failed"].includes(job.data.status));
+  const finished = Boolean(job.data && FINISHED.includes(job.data.status));
   // Refresh once per finished job (the key list is a new array on every render).
   const handled = useRef<number | null>(null);
   const keys = useRef(refresh);

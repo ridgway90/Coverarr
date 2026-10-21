@@ -1,5 +1,7 @@
 """End-to-end: three fake servers -> import -> review -> push fixes -> re-import."""
 
+import asyncio
+
 from tests.conftest import SERVER_CONFIGS, run_job
 
 
@@ -374,3 +376,36 @@ async def test_same_name_collections_stay_separate(app, authed, fake_servers):
     detail = (await client.get(f"/api/collections/{coll_id}")).json()
     assert detail["name"] == "Paddington Films"
     assert len(detail["servers"]) == 3
+
+
+async def test_cancel_job(app, authed):
+    runner = app.state.jobs
+    started = asyncio.Event()
+
+    async def slow(ctx):
+        await ctx.log("working")
+        started.set()
+        await asyncio.sleep(60)
+
+    runner.register("slow_test", slow)
+    running = await runner.enqueue("slow_test", {"n": 1})
+    queued = await runner.enqueue("slow_test", {"n": 2})
+    await asyncio.wait_for(started.wait(), 5)
+
+    assert (await authed.post(f"/api/jobs/{queued.id}/cancel")).status_code == 200
+    assert (await authed.post(f"/api/jobs/{running.id}/cancel")).status_code == 200
+    await asyncio.wait_for(runner.wait_idle(), 5)
+    for job_id in (running.id, queued.id):
+        job = (await authed.get(f"/api/jobs/{job_id}")).json()
+        assert job["status"] == "cancelled"
+    assert "Cancelled" in (await authed.get(f"/api/jobs/{running.id}")).json()["log"]
+    assert (await authed.post(f"/api/jobs/{running.id}/cancel")).status_code == 409
+
+    # The worker carries on with the next job.
+    async def quick(ctx):
+        return {"ok": True}
+
+    runner.register("quick_test", quick)
+    job = await runner.enqueue("quick_test")
+    await asyncio.wait_for(runner.wait_idle(), 5)
+    assert (await authed.get(f"/api/jobs/{job.id}")).json()["status"] == "succeeded"

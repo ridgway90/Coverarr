@@ -8,8 +8,11 @@ Saving artwork makes it the chosen base poster, so it shows up under Changes unt
 from __future__ import annotations
 
 import asyncio
+import multiprocessing
+import os
 import re
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -26,7 +29,7 @@ from coverarr.services.assets import (
     write_asset,
 )
 from coverarr.services.jobs import JobContext
-from coverarr.services.kometa import IMAGE_SUFFIXES, Source, prepare
+from coverarr.services.kometa import IMAGE_SUFFIXES, Prepared, Source, prepare
 from coverarr.services.lists import ListClient, ListError
 from coverarr.services.matching import normalize_collection_name, normalize_title
 from coverarr.services.settings_store import get_setting
@@ -50,12 +53,14 @@ async def save_artwork(
     collection_id: int | None = None,
     choose: bool = True,
     taken: dict[str, str] | None = None,
+    prepared: Prepared | None = None,
 ) -> Artwork:
     """Store ``data`` as this owner's ``source`` artwork (replacing any earlier one) and,
     with ``choose``, make it the base poster."""
     if len(data) > MAX_BYTES:
         raise ArtworkError("That image is larger than 25 MB")
-    prepared = await asyncio.to_thread(prepare, name or "poster", data)
+    if prepared is None:
+        prepared = await asyncio.to_thread(prepare, name or "poster", data)
     if prepared is None:
         raise ArtworkError("That file isn't a JPEG, PNG or WebP image")
     owner_filter = (
@@ -466,6 +471,7 @@ class _ResetTarget:
     imdb_id: str | None = None
     season_number: int | None = None
     parent_id: int | None = None
+    poster_source: str | None = None
 
 
 async def run_tmdb_reset(ctx: JobContext) -> dict[str, Any]:
@@ -485,6 +491,17 @@ async def run_tmdb_reset(ctx: JobContext) -> dict[str, Any]:
             for (a,) in (
                 await session.execute(
                     select(Artwork.id).where(Artwork.source.in_(("upload", "set")))
+                )
+            ).all()
+        }
+
+        # Each TMDb artwork's image path, so a re-run (e.g. after a cancel) can skip titles
+        # whose base is already TMDb's current main poster.
+        tmdb_names = {
+            f"artwork:{a}": name
+            for a, name in (
+                await session.execute(
+                    select(Artwork.id, Artwork.original_name).where(Artwork.source == "tmdb")
                 )
             ).all()
         }
@@ -511,6 +528,7 @@ async def run_tmdb_reset(ctx: JobContext) -> dict[str, Any]:
                         m.imdb_id,
                         m.season_number,
                         m.parent_id,
+                        m.poster_source,
                     )
                 )
             parent_ids = {t.parent_id for t in targets if t.kind == "season" and t.parent_id}
@@ -529,8 +547,11 @@ async def run_tmdb_reset(ctx: JobContext) -> dict[str, Any]:
                 )
             for c in await session.scalars(query):
                 if not keep(c.poster_source):
-                    targets.append(_ResetTarget("collection", c.id, c.name))
+                    targets.append(
+                        _ResetTarget("collection", c.id, c.name, poster_source=c.poster_source)
+                    )
         client = await _list_client(session)
+        taken = await taken_paths(session)
 
     await ctx.log(f"{len(targets)} posters to fetch from TMDb")
     counts: dict[str, int] = defaultdict(int)
@@ -547,6 +568,10 @@ async def run_tmdb_reset(ctx: JobContext) -> dict[str, Any]:
                 path = await _tmdb_main_poster(
                     client, t, shows.get(t.parent_id) if t.parent_id else None, tv_ids
                 )
+                if path and tmdb_names.get(t.poster_source or "") == path.lstrip("/"):
+                    counts["unchanged"] += 1
+                    done += 1
+                    return
                 data = await client.download(f"{TMDB_IMAGES}/original{path}") if path else None
             except ListError as exc:
                 if "API key" in str(exc):
@@ -559,6 +584,12 @@ async def run_tmdb_reset(ctx: JobContext) -> dict[str, Any]:
             if len(missing) < 200:
                 missing.append(t.title)
             return
+        # Decoding and fingerprinting is the CPU-heavy part: spread it over the cores.
+        prepared = await loop.run_in_executor(pool, prepare, path.lstrip("/"), data)
+        if prepared is None:
+            counts["failed"] += 1
+            await ctx.log(f"{t.title}: TMDb sent an unreadable image")
+            return
         async with lock, ctx.sessionmaker() as session:
             try:
                 await save_artwork(
@@ -570,6 +601,8 @@ async def run_tmdb_reset(ctx: JobContext) -> dict[str, Any]:
                     media_item_id=t.id if t.kind != "collection" else None,
                     collection_id=t.id if t.kind == "collection" else None,
                     choose=True,
+                    taken=taken,
+                    prepared=prepared,
                 )
                 await session.commit()
                 counts["replaced"] += 1
@@ -580,17 +613,25 @@ async def run_tmdb_reset(ctx: JobContext) -> dict[str, Any]:
         if done % 20 == 0:
             await ctx.progress(0.98 * done / max(len(targets), 1), f"Fetched {done}/{len(targets)}")
 
-    async with client:
-        # Shows before their seasons, so each show's TMDb id is looked up once.
-        targets.sort(key=lambda t: (t.kind == "season", t.title.lower()))
-        for start in range(0, len(targets), 200):
-            await asyncio.gather(*(one(t) for t in targets[start : start + 200]))
+    loop = asyncio.get_running_loop()
+    pool = ProcessPoolExecutor(
+        max_workers=max(1, (os.cpu_count() or 2) - 1),
+        mp_context=multiprocessing.get_context("spawn"),
+    )
+    try:
+        async with client:
+            # Shows before their seasons, so each show's TMDb id is looked up once.
+            targets.sort(key=lambda t: (t.kind == "season", t.title.lower()))
+            for start in range(0, len(targets), 200):
+                await asyncio.gather(*(one(t) for t in targets[start : start + 200]))
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+        # Also when cancelled: the posters replaced so far need their issues updated.
+        from coverarr.services.review import refresh_issues
 
-    from coverarr.services.review import refresh_issues
-
-    async with ctx.sessionmaker() as session:
-        await refresh_issues(session)
-        await session.commit()
+        async with ctx.sessionmaker() as session:
+            await refresh_issues(session)
+            await session.commit()
     await ctx.progress(1.0, "Posters reset from TMDb")
     await ctx.log(
         f"Replaced {counts['replaced']} posters; {counts['not_on_tmdb']} not found on TMDb"
