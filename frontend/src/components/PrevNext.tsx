@@ -42,8 +42,9 @@ export default function PrevNext({ kind, id, from }: { kind: "items" | "collecti
       if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       if (el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName))) return;
       if (document.querySelector('[role="dialog"]')) return;
-      if (e.key === "ArrowLeft" && prev) navigate(prev);
-      if (e.key === "ArrowRight" && next) navigate(next);
+      // Replace rather than push: Back then returns to the list, not the previous title.
+      if (e.key === "ArrowLeft" && prev) navigate(prev, { replace: true });
+      if (e.key === "ArrowRight" && next) navigate(next, { replace: true });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -54,7 +55,7 @@ export default function PrevNext({ kind, id, from }: { kind: "items" | "collecti
   return (
     <div className="flex items-center gap-2" aria-label="Browse">
       {prev ? (
-        <Link to={prev} className={`${button} hover:bg-panel-2`} title={`${data.prev!.title} (←)`}>
+        <Link to={prev} replace className={`${button} hover:bg-panel-2`} title={`${data.prev!.title} (←)`}>
           <ChevronLeft className="size-4" /> Previous
         </Link>
       ) : (
@@ -66,7 +67,7 @@ export default function PrevNext({ kind, id, from }: { kind: "items" | "collecti
         {data.position.toLocaleString()} of {data.total.toLocaleString()}
       </span>
       {next ? (
-        <Link to={next} className={`${button} hover:bg-panel-2`} title={`${data.next!.title} (→)`}>
+        <Link to={next} replace className={`${button} hover:bg-panel-2`} title={`${data.next!.title} (→)`}>
           Next <ChevronRight className="size-4" />
         </Link>
       ) : (

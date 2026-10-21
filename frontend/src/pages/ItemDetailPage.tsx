@@ -7,6 +7,7 @@ import PendingPush from "../components/PendingPush";
 import { Button, Card, ErrorNote, PageHeader, PresenceChips, Spinner } from "../components/ui";
 import { api, type ItemDetail } from "../lib/api";
 import { useJobAction, useLibraries, useServerMap } from "../lib/hooks";
+import { useBack } from "../lib/navTrail";
 import { describeIssue } from "./ReviewPage";
 
 export default function ItemDetailPage() {
@@ -32,6 +33,12 @@ export default function ItemDetailPage() {
     },
   });
 
+  const itemLibrary = libs?.libraries.find((l) => l.id === item?.library_id);
+  const back = useBack({
+    to: itemLibrary ? `/library/${itemLibrary.id}${from ? `?${from}` : ""}` : "/",
+    label: itemLibrary?.name ?? "Back",
+  });
+
   if (isLoading) return <Spinner />;
   if (error || !item) return <ErrorNote error={error ?? "Not found"} />;
   const library = libs?.libraries.find((l) => l.id === item.library_id);
@@ -46,16 +53,9 @@ export default function ItemDetailPage() {
   return (
     <>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        {library ? (
-          <Link
-            to={`/library/${library.id}${from ? `?${from}` : ""}`}
-            className="inline-flex items-center gap-1 text-sm text-muted hover:text-text"
-          >
-            <ArrowLeft className="size-4" /> {library.name}
-          </Link>
-        ) : (
-          <span />
-        )}
+        <a href={back.href} onClick={back.go} className="inline-flex items-center gap-1 text-sm text-muted hover:text-text">
+          <ArrowLeft className="size-4" /> {back.label}
+        </a>
         {(item.kind === "movie" || item.kind === "show") && <PrevNext kind="items" id={item.id} from={from} />}
       </div>
       <PageHeader

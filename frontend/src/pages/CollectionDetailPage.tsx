@@ -9,6 +9,7 @@ import PendingPush from "../components/PendingPush";
 import { Button, Card, ErrorNote, PageHeader, PresenceChips, ServerChip, Spinner } from "../components/ui";
 import { api, type CollectionDetail } from "../lib/api";
 import { useJobAction, useLibraries, useServerMap } from "../lib/hooks";
+import { useBack } from "../lib/navTrail";
 import { describeIssue } from "./ReviewPage";
 
 export default function CollectionDetailPage() {
@@ -44,6 +45,12 @@ export default function CollectionDetailPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["dashboard"] }),
   });
 
+  const collLibrary = libs?.libraries.find((l) => l.id === coll?.library_id);
+  const back = useBack({
+    to: `/collections${from ? `?${from}` : collLibrary ? `?library=${collLibrary.id}` : ""}`,
+    label: "Collections",
+  });
+
   if (isLoading) return <Spinner />;
   if (error || !coll) return <ErrorNote error={error ?? "Not found"} />;
   const library = libs?.libraries.find((l) => l.id === coll.library_id);
@@ -55,12 +62,9 @@ export default function CollectionDetailPage() {
   return (
     <>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <Link
-          to={`/collections${from ? `?${from}` : library ? `?library=${library.id}` : ""}`}
-          className="inline-flex items-center gap-1 text-sm text-muted hover:text-text"
-        >
-          <ArrowLeft className="size-4" /> Collections
-        </Link>
+        <a href={back.href} onClick={back.go} className="inline-flex items-center gap-1 text-sm text-muted hover:text-text">
+          <ArrowLeft className="size-4" /> {back.label}
+        </a>
         <PrevNext kind="collections" id={coll.id} from={from} />
       </div>
       <PageHeader

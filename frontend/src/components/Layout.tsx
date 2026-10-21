@@ -14,9 +14,10 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { api } from "../lib/api";
+import { useNavTrail } from "../lib/navTrail";
 import { jobLabel, useActiveJobs, useChangesSummary, useLibraries } from "../lib/hooks";
 import { CountBadge, cx } from "./ui";
 
@@ -43,6 +44,8 @@ export default function Layout({ username }: { username: string }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const location = useLocation();
+  const mainRef = useRef<HTMLElement>(null);
+  useNavTrail(mainRef);
   const { data: libs } = useLibraries();
   const { active, dashboard } = useActiveJobs();
   const { data: changes } = useChangesSummary();
@@ -119,7 +122,7 @@ export default function Layout({ username }: { username: string }) {
           </button>
           <span className="font-semibold">Coverarr</span>
         </header>
-        <main key={location.pathname} className="flex-1 overflow-y-auto scrollbar-thin">
+        <main ref={mainRef} key={location.pathname} className="flex-1 overflow-y-auto scrollbar-thin">
           <div className="mx-auto max-w-[1600px] px-4 py-6 sm:px-8">
             <Outlet />
           </div>
