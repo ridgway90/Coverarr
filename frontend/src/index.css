@@ -44,3 +44,10 @@ body {
   scrollbar-width: thin;
   scrollbar-color: var(--color-line) transparent;
 }
+
+/* Behind transparent overlay images, so their edges show. */
+.checkerboard {
+  background-color: #2a2d34;
+  background-image: conic-gradient(#3a3e47 25%, transparent 0 50%, #3a3e47 0 75%, transparent 0);
+  background-size: 16px 16px;
+}

@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from PIL import Image
 from pydantic import BaseModel
@@ -19,17 +19,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from coverarr.api.kometa import _save_upload
 from coverarr.db import get_session
 from coverarr.models import Artwork, Library, MediaItem, Server, ServerItem
+from coverarr.services import overlay_slots
 from coverarr.services.changes import plan_item
 from coverarr.services.mediainfo import RANK
 from coverarr.services.overlays import (
     LEVELS,
     OverlayError,
+    _safe_rel,
     clean_layers,
     default_library,
     describe_pack,
     install_pack,
     library_config,
     load_config,
+    pack_dir,
     plan_args,
     render_image,
     render_to_file,
@@ -272,3 +275,104 @@ async def preview_layers(
             "X-Overlay-Missing": ", ".join(change.render.plan.missing)[:500],
         },
     )
+
+
+# --- single overlay images ---------------------------------------------------------------------
+
+
+async def _slot_context(
+    request: Request, session: AsyncSession
+) -> tuple[dict[str, Any], Path | None, list[overlay_slots.Slot]]:
+    config = await load_config(session)
+    networks = [
+        f["network"]
+        for (f,) in (
+            await session.execute(select(MediaItem.facts).where(MediaItem.kind == "show"))
+        ).all()
+        if f and f.get("network")
+    ]
+    root = pack_dir(_config_dir(request), config.get("pack"))
+    return config, root, overlay_slots.catalogue(config, networks)
+
+
+@router.get("/slots")
+async def list_slots(request: Request, session: AsyncSession = Depends(get_session)):
+    """Every overlay image the layers can use, and what fills each slot now."""
+    config, root, slots = await _slot_context(request, session)
+    described = await asyncio.to_thread(overlay_slots.describe, root, slots)
+    return {
+        "pack": config.get("pack"),
+        "folders": overlay_slots.folders(config),
+        "slots": described,
+    }
+
+
+@router.post("/slots")
+async def upload_slot(
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    path: Annotated[str, Form()],
+    session: AsyncSession = Depends(get_session),
+):
+    """Put one image into a slot: converted to PNG and named as the renderer expects."""
+    config, root, slots = await _slot_context(request, session)
+    slot = next((s for s in slots if s.path == path), None)
+    if slot is None:
+        raise HTTPException(422, "Unknown overlay slot")
+    if root is None:
+        # No pack yet: start one, so single images can be built up from nothing.
+        config["pack"] = "custom"
+        root = pack_dir(_config_dir(request), "custom")
+        await save_config(session, config)
+        await session.commit()
+    data = await file.read(overlay_slots.MAX_IMAGE_BYTES + 1)
+    try:
+        saved = await asyncio.to_thread(overlay_slots.save, root, slot, data)
+    except OverlayError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"path": saved}
+
+
+@router.delete("/slots")
+async def delete_slot(
+    request: Request, path: str = Query(...), session: AsyncSession = Depends(get_session)
+):
+    config, root, slots = await _slot_context(request, session)
+    if root is None or not any(s.path == path for s in slots):
+        raise HTTPException(404, "Unknown overlay slot")
+    await asyncio.to_thread(overlay_slots.remove, root, path)
+    return {"ok": True}
+
+
+class GuessRequest(BaseModel):
+    names: list[str]
+
+
+@router.post("/slots/guess")
+async def guess_slots(
+    body: GuessRequest, request: Request, session: AsyncSession = Depends(get_session)
+):
+    """Which slot each file name is probably for (None when it can't tell)."""
+    _, _, slots = await _slot_context(request, session)
+    return [{"name": n, "path": overlay_slots.guess(n, slots)} for n in body.names[:200]]
+
+
+@router.get("/pack/file")
+async def pack_file(
+    request: Request, path: str = Query(...), session: AsyncSession = Depends(get_session)
+):
+    """One image from the pack (for thumbnails)."""
+    config = await load_config(session)
+    root = pack_dir(_config_dir(request), config.get("pack"))
+    try:
+        rel = _safe_rel(path)
+    except OverlayError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    full = root / rel if root else None
+    if (
+        full is None
+        or full.suffix.lower() not in overlay_slots.IMAGE_SUFFIXES
+        or not full.is_file()
+    ):
+        raise HTTPException(404, "Not in the overlay pack")
+    return FileResponse(full, headers={"Cache-Control": "private, max-age=3600"})

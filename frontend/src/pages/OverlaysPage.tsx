@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowDown, ArrowUp, FileUp, Layers, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import OverlayImages from "../components/OverlayImages";
 import { Button, Card, ErrorNote, PageHeader, Spinner, Tabs, cx, inputClass, selectClass, useDebounced } from "../components/ui";
 import { api, qs, uploadWithProgress, type LayerType, type OverlayLayer, type OverlayLibrary, type OverlayPack } from "../lib/api";
 
@@ -55,6 +56,7 @@ export default function OverlaysPage() {
             </p>
           )}
           <PackCard pack={data.pack} />
+          <OverlayImages />
           {data.pack && data.libraries.map((lib) => <LibraryCard key={lib.id} library={lib} />)}
         </div>
       )}

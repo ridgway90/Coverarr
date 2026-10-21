@@ -111,6 +111,19 @@ possible: it tracks what each server already has and only touches what actually 
     upgrade) or overlay settings changed are rendered and pushed again. Rendering uses every
     CPU core but one; rendered posters are cached in `/config/cache/rendered`.
   - After updating to this version, run an **import** once so media info is collected.
+  - **Overlay images**: no zip needed. Every image the layers can use is a slot on the
+    Overlays page:
+    - gradients
+    - a grid of resolution badges (4K, 1080p, 720p, SD × SDR, HDR, HDR10+, Dolby Vision,
+      DV + HDR, DV + HDR10+)
+    - editions
+    - the networks your shows use
+
+    Click a slot to upload one image. It's converted to PNG and saved under the name and
+    folder the overlays look for (e.g. `resolution/4kdvhdr.png`), replacing the old one.
+    *Add several images* guesses each file's slot from its name ("4K Dolby Vision.png") for
+    you to check. Empty slots borrow a simpler badge (4K DV + HDR falls back to 4K DV, then
+    4K). The SD badges cover 576p and 480p.
 - **Housekeeping** (sidebar → Housekeeping), for making Coverarr the source of truth:
   - *Without a base*: a suggested base for every film, show, season and collection that has
     none, with its reasons and a confidence (like the mismatch suggestions). It's the artwork
