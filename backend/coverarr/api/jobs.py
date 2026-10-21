@@ -66,6 +66,13 @@ async def start_job(body: JobRequest, request: Request):
     return job_out(job, request.app.state.jobs)
 
 
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: int, request: Request):
+    if not await request.app.state.jobs.cancel(job_id):
+        raise HTTPException(409, "That job has already finished")
+    return {"ok": True}
+
+
 @router.get("/dashboard")
 async def dashboard(request: Request, session: AsyncSession = Depends(get_session)):
     servers = list(await session.scalars(select(Server).order_by(Server.id)))

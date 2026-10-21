@@ -1,6 +1,7 @@
 import { RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import CancelJob from "./CancelJob";
 import { api } from "../lib/api";
 import { useJobAction, useLibraries } from "../lib/hooks";
 import { Button, Card, ErrorNote, selectClass } from "./ui";
@@ -26,7 +27,7 @@ export default function TmdbReset() {
     ["changes", "items", "item", "collections", "collection", "housekeeping", "issues", "review"],
   );
   const job = reset.job;
-  const result = job?.result as { replaced?: number; not_on_tmdb?: number; failed?: number; not_found?: string[] } | undefined;
+  const result = job?.result as { replaced?: number; unchanged?: number; not_on_tmdb?: number; failed?: number; not_found?: string[] } | undefined;
   const library = libs?.libraries.find((l) => String(l.id) === libraryId);
   const start = () => {
     const scope = library ? `in ${library.name}` : "everywhere";
@@ -96,16 +97,29 @@ export default function TmdbReset() {
       <ErrorNote error={reset.error} />
       {job && (job.status === "queued" || job.status === "running") && (
         <div className="mt-3 rounded-md border border-line bg-panel-2 px-3 py-2 text-sm">
-          {job.message ?? "Queued"}
+          <div className="flex items-center justify-between gap-4">
+            {job.message ?? "Queued"}
+            <CancelJob job={job} />
+          </div>
           <div className="mt-2 h-1 overflow-hidden rounded bg-line">
             <div className="h-full bg-accent transition-all" style={{ width: `${Math.round(job.progress * 100)}%` }} />
           </div>
         </div>
       )}
       {job?.status === "failed" && <div className="mt-3 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{job.error}</div>}
+      {job?.status === "cancelled" && (
+        <div className="mt-3 rounded-md border border-line bg-panel-2 px-3 py-2 text-sm">
+          Cancelled. Posters replaced before that are kept;{" "}
+          <Link to="/changes" className="text-accent hover:underline">
+            push them from Changes
+          </Link>{" "}
+          or run the reset again to carry on (titles already done are skipped quickly).
+        </div>
+      )}
       {job?.status === "succeeded" && result && (
         <div className="mt-3 rounded-md border border-ok/30 bg-ok/10 px-3 py-2 text-sm">
           Replaced {Number(result.replaced ?? 0).toLocaleString()} posters
+          {result.unchanged ? `; ${result.unchanged.toLocaleString()} already had TMDb's poster` : ""}
           {result.failed ? `; ${result.failed} failed (see Activity)` : ""}.{" "}
           <Link to="/changes" className="text-accent hover:underline">
             Push them from Changes

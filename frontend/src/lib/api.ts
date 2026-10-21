@@ -309,7 +309,7 @@ export interface CollectionDetail extends Omit<CollectionSummary, "issues"> {
 export interface Job {
   id: number;
   kind: string;
-  status: "queued" | "running" | "succeeded" | "failed";
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   progress: number;
   message: string | null;
   params: Record<string, unknown>;

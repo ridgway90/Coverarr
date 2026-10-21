@@ -41,7 +41,10 @@ possible: it tracks what each server already has and only touches what actually 
   your uploads and poster-set imports are kept; you can also limit it to titles without a base.
   Films need a TMDb id, shows are matched by TMDb, TVDB or IMDb id, collections by name.
   Nothing reaches your servers until you push from *Changes*; overlays are drawn on the new
-  posters if switched on.
+  posters if switched on. Images are fingerprinted on every core but one, and a re-run skips
+  titles that already have TMDb's current poster, so a cancelled reset carries on quickly.
+- **Cancel** any queued or running task from *Activity* (or next to its progress bar). Work it
+  already finished, such as posters already pushed, is kept.
 - **A–Z bar** on films, TV and collections ("The"/"A"/"An" are skipped, so *The Holiday* is
   under H).
 - **Overlays** (sidebar → Overlays). Upload an overlay pack once (e.g. the jmxd zip; it's

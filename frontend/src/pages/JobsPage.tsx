@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle2, ChevronRight, Clock, Loader2, XCircle } from "lucide-react";
+import { Ban, CheckCircle2, ChevronRight, Clock, Loader2, XCircle } from "lucide-react";
 import { useState } from "react";
+import CancelJob from "../components/CancelJob";
 import { Card, EmptyState, Modal, PageHeader, Spinner, formatDate } from "../components/ui";
 import { api, type Job } from "../lib/api";
 import { jobLabel } from "../lib/hooks";
@@ -8,6 +9,7 @@ import { jobLabel } from "../lib/hooks";
 function StatusIcon({ status }: { status: Job["status"] }) {
   if (status === "succeeded") return <CheckCircle2 className="size-4 text-ok" />;
   if (status === "failed") return <XCircle className="size-4 text-danger" />;
+  if (status === "cancelled") return <Ban className="size-4 text-muted" />;
   if (status === "running") return <Loader2 className="size-4 animate-spin text-accent" />;
   return <Clock className="size-4 text-muted" />;
 }
@@ -41,8 +43,8 @@ export default function JobsPage() {
         <Card>
           <ul className="divide-y divide-line">
             {data.map((job) => (
-              <li key={job.id}>
-                <button className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-panel-2" onClick={() => setOpenId(job.id)}>
+              <li key={job.id} className="flex items-center hover:bg-panel-2">
+                <button className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left" onClick={() => setOpenId(job.id)}>
                   <StatusIcon status={job.status} />
                   <div className="min-w-0 flex-1">
                     <div className="font-medium">{jobLabel(job)}</div>
@@ -61,6 +63,7 @@ export default function JobsPage() {
                   </div>
                   <ChevronRight className="size-4 text-muted" />
                 </button>
+                <CancelJob job={job} className="mr-4" />
               </li>
             ))}
           </ul>
@@ -86,6 +89,7 @@ function JobModal({ id, onClose }: { id: number; onClose: () => void }) {
           <div className="flex items-center gap-2">
             <StatusIcon status={job.status} /> <span className="capitalize">{job.status}</span>
             <span className="text-muted">· {duration(job)}</span>
+            <CancelJob job={job} className="ml-auto" />
           </div>
           {job.error && <div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-danger">{job.error}</div>}
           <div>

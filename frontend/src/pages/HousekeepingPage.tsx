@@ -2,6 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { CheckCircle2, Layers, Search, Upload, Wrench } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import CancelJob from "../components/CancelJob";
 import { Button, Card, ErrorNote, PageHeader, Pagination, Poster, ServerChip, Spinner, Tabs, cx, inputClass, selectClass, useDebounced } from "../components/ui";
 import { api, qs, type Job, type PosterRef } from "../lib/api";
 import { useJobAction, useLibraries, useServerMap, useServers } from "../lib/hooks";
@@ -77,13 +78,17 @@ function JobNote({ job, describe }: { job: Job | undefined; describe: (r: Record
   if (job.status === "queued" || job.status === "running") {
     return (
       <div className="mt-3 rounded-md border border-line bg-panel-2 px-3 py-2 text-sm">
-        {job.message ?? "Queued"}
+        <div className="flex items-center justify-between gap-4">
+          {job.message ?? "Queued"}
+          <CancelJob job={job} />
+        </div>
         <div className="mt-2 h-1 overflow-hidden rounded bg-line">
           <div className="h-full bg-accent transition-all" style={{ width: `${Math.round(job.progress * 100)}%` }} />
         </div>
       </div>
     );
   }
+  if (job.status === "cancelled") return <div className="mt-3 rounded-md border border-line bg-panel-2 px-3 py-2 text-sm">Cancelled. Anything done before that is kept.</div>;
   if (job.status === "failed") return <div className="mt-3 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{job.error}</div>;
   return <div className="mt-3 rounded-md border border-ok/30 bg-ok/10 px-3 py-2 text-sm">{describe(job.result ?? {})}</div>;
 }

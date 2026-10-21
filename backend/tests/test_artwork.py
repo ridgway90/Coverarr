@@ -372,6 +372,13 @@ async def test_reset_from_tmdb(app, authed, fake_servers):
             int(kept["poster_source"].split(":")[1])
         ] == "upload"
 
+        # A plain re-run (e.g. after a cancel) skips what is already on TMDb's poster.
+        resp = await client.post("/api/posters/reset-from-tmdb", json={})
+        await app.state.jobs.wait_idle()
+        job = (await client.get(f"/api/jobs/{resp.json()['job_id']}")).json()
+        assert job["result"].get("replaced", 0) == 0
+        assert job["result"]["unchanged"] == 9 + 2 + 5 + 1
+
         # Only titles without a base: everything found has one now.
         resp = await client.post("/api/posters/reset-from-tmdb", json={"only_missing": True})
         await app.state.jobs.wait_idle()

@@ -60,6 +60,8 @@ class JobRunner:
         self._worker: asyncio.Task[None] | None = None
         # The running job's context, keyed by job id.
         self.live: dict[int, JobContext] = {}
+        self._running: tuple[int, asyncio.Task[Any]] | None = None
+        self._cancelling: set[int] = set()
 
     def register(self, kind: str, handler: JobHandler) -> None:
         self.handlers[kind] = handler
@@ -107,6 +109,25 @@ class JobRunner:
         self._queue.put_nowait(job.id)
         return job
 
+    async def cancel(self, job_id: int) -> bool:
+        """Stop a queued or running job; work it already finished (e.g. posters pushed) is
+        kept. False if the job has already ended."""
+        async with self.sessionmaker() as session:
+            job = await session.get(Job, job_id)
+            if job is None or job.status not in ("queued", "running"):
+                return False
+            if job.status == "queued":
+                job.status = "cancelled"
+                job.message = "Cancelled"
+                job.finished_at = utcnow()
+                await session.commit()
+                return True
+        if self._running and self._running[0] == job_id:
+            self._cancelling.add(job_id)
+            self._running[1].cancel()
+            return True
+        return False
+
     async def wait_idle(self) -> None:
         """Block until the queue is drained (used by tests)."""
         await self._queue.join()
@@ -134,8 +155,16 @@ class JobRunner:
         ctx = JobContext(job_id, params, self.sessionmaker)
         self.live[job_id] = ctx
         status, result, error = "succeeded", None, None
+        task = asyncio.create_task(self.handlers[kind](ctx))
+        self._running = (job_id, task)
         try:
-            result = await self.handlers[kind](ctx)
+            result = await task
+        except asyncio.CancelledError:
+            if job_id not in self._cancelling:  # the app is shutting down
+                task.cancel()
+                raise
+            status = "cancelled"
+            ctx.log_lines.append("Cancelled")
         except Exception as exc:
             log.exception("Job %s (%s) failed", job_id, kind)
             status, error = "failed", f"{exc}\n\n{traceback.format_exc()}"
@@ -149,8 +178,10 @@ class JobRunner:
             job.result = result
             job.error = error
             job.log = ctx.log_lines
-            job.message = ctx.message if status == "succeeded" else "Failed"
+            job.message = ctx.message if status == "succeeded" else status.capitalize()
             job.progress = 1.0 if status == "succeeded" else ctx.fraction
             job.finished_at = utcnow()
             await session.commit()
         self.live.pop(job_id, None)
+        self._running = None
+        self._cancelling.discard(job_id)

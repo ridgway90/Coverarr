@@ -2,6 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { ArrowRight, CheckCircle2, Search, Trash2, Upload } from "lucide-react";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import CancelJob from "../components/CancelJob";
 import {
   Button,
   Card,
@@ -106,7 +107,10 @@ export default function ChangesPage() {
         <Card className="mb-4 p-4 text-sm">
           <div className="flex items-center justify-between gap-4">
             <span>{job.message ?? "Queued"}</span>
-            <span className="text-muted">{Math.round(job.progress * 100)}%</span>
+            <span className="flex items-center gap-3 text-muted">
+              {Math.round(job.progress * 100)}%
+              <CancelJob job={job} />
+            </span>
           </div>
           <div className="mt-2 h-1 overflow-hidden rounded bg-line">
             <div className="h-full bg-accent transition-all" style={{ width: `${Math.round(job.progress * 100)}%` }} />
@@ -123,6 +127,8 @@ export default function ChangesPage() {
         >
           {job.status === "failed"
             ? job.error
+            : job.status === "cancelled"
+            ? "Push cancelled. Posters already uploaded are kept; the rest are still listed below."
             : `Uploaded ${Number(job.result?.uploaded ?? 0).toLocaleString()} posters` +
               (job.result?.failed ? `; ${job.result.failed} failed (see Activity)` : ".")}
         </div>
