@@ -227,3 +227,38 @@ async def test_alphabet_filter(app, authed, fake_servers):
     assert sorted(i["title"] for i in digits["items"]) == ["9", "9 Songs"]
     bad = await client.get("/api/items", params={"library_id": films["id"], "letter": "AB"})
     assert bad.status_code == 422
+
+
+async def test_previous_next(app, authed, fake_servers):
+    client = authed
+    await add_servers(client)
+    await run_job(app, client, "import")
+    films, _ = await _libs(client)
+    page = (
+        await client.get("/api/items", params={"library_id": films["id"], "letter": "H"})
+    ).json()
+    ids = [i["id"] for i in page["items"]]
+    middle = (await client.get(f"/api/items/{ids[1]}/neighbours", params={"letter": "H"})).json()
+    assert (middle["prev"]["id"], middle["next"]["id"]) == (ids[0], ids[2])
+    assert (middle["position"], middle["total"]) == (2, 3)
+    last = (await client.get(f"/api/items/{ids[2]}/neighbours", params={"letter": "H"})).json()
+    assert last["next"] is None and last["prev"]["id"] == ids[1]
+    # Without filters it walks the whole library in the listing's order.
+    everything = (
+        await client.get("/api/items", params={"library_id": films["id"], "page_size": 100})
+    ).json()["items"]
+    first = (await client.get(f"/api/items/{everything[0]['id']}/neighbours")).json()
+    assert first["prev"] is None and first["next"]["id"] == everything[1]["id"]
+    # Filtered out of the list: no neighbours rather than wrong ones.
+    outside = (
+        await client.get(f"/api/items/{everything[0]['id']}/neighbours", params={"letter": "Z"})
+    ).json()
+    assert outside["position"] is None
+
+    colls = (await client.get("/api/collections", params={"library_id": films["id"]})).json()
+    nav = (await client.get(f"/api/collections/{colls[0]['id']}/neighbours")).json()
+    assert nav["prev"] is None and nav["next"]["id"] == colls[1]["id"]
+    nav = (
+        await client.get(f"/api/collections/{colls[0]['id']}/neighbours", params={"letter": "P"})
+    ).json()
+    assert nav["position"] is None

@@ -44,6 +44,13 @@ export default function LibraryPage() {
     setParams(next, { replace: true });
   };
 
+  // Carried to the title page so Previous/Next walk this same list.
+  const listParams = (() => {
+    const p = new URLSearchParams(params);
+    p.delete("page");
+    if (q) p.set("q", q);
+    return p.toString();
+  })();
   const missingOn = filter.startsWith("missing:") ? Number(filter.split(":")[1]) : undefined;
   const issues = ["poster", "push", "missing", "any"].includes(filter) ? filter : undefined;
   const { data, isLoading, isFetching } = useQuery({
@@ -106,7 +113,7 @@ export default function LibraryPage() {
         <div className={isFetching ? "opacity-70 transition-opacity" : ""}>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8">
             {data.items.map((item) => (
-              <Link key={item.id} to={`/items/${item.id}`} className="group">
+              <Link key={item.id} to={`/items/${item.id}?from=${encodeURIComponent(listParams)}`} className="group">
                 <div className="relative">
                   <Poster presence={item.poster} alt={item.title} className="ring-accent/0 transition group-hover:ring-2 group-hover:ring-accent" />
                   {item.issues.length > 0 && (
