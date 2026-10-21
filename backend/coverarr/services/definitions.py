@@ -29,6 +29,7 @@ from coverarr.models import (
     ServerLibrary,
     utcnow,
 )
+from coverarr.services import trakt
 from coverarr.services.jobs import JobContext
 from coverarr.services.kometa_yaml import ParsedCollection
 from coverarr.services.lists import (
@@ -386,7 +387,7 @@ async def _lists(session: AsyncSession) -> ListClient:
     return ListClient(
         tmdb_key=await get_setting(session, "tmdb_api_key"),
         trakt_client_id=await get_setting(session, "trakt_client_id"),
-        trakt_token=await get_setting(session, "trakt_access_token"),
+        trakt_token=await trakt.access_token(session),
     )
 
 

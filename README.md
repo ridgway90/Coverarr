@@ -85,6 +85,12 @@ possible: it tracks what each server already has and only touches what actually 
   choose to take them over. Kometa files can use the chart builders too
   (e.g. `tmdb_popular: 30`). There's no IMDb chart: IMDb has no API (TMDb top rated or a
   Trakt list are good stand-ins).
+- **Trakt** (Settings → General): the client ID of your Trakt app is enough for public lists
+  and charts. To use private lists, *Connect Trakt* signs in with OAuth PKCE, so no client
+  secret is needed. Set the app's redirect URI to the one shown (Coverarr's
+  `/trakt/callback`). If Coverarr isn't on https, register any https address in the app and
+  paste back the address the browser lands on. The sign-in renews itself before its 7 days
+  run out.
 - **Cancel** any queued or running task from *Activity* (or next to its progress bar). Work it
   already finished, such as posters already pushed, is kept.
 - **A–Z bar** on films, TV and collections ("The"/"A"/"An" are skipped, so *The Holiday* is

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Pencil, Plus, Trash2, XCircle } from "lucide-react";
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Button,
   Card,
@@ -20,13 +21,18 @@ import AutomationSettings from "../components/AutomationSettings";
 import KometaImport from "../components/KometaImport";
 import PosterSetImport from "../components/PosterSetImport";
 import TmdbReset from "../components/TmdbReset";
+import TraktConnect from "../components/TraktConnect";
 import { api, type Server, type ServerKind, type ServerLibrary, type TestResult } from "../lib/api";
 import { useLibraries, useServers } from "../lib/hooks";
 
 type Tab = "servers" | "libraries" | "automation" | "kometa" | "sets" | "reset" | "general";
 
+const TABS: Tab[] = ["servers", "libraries", "automation", "kometa", "sets", "reset", "general"];
+
 export default function SettingsPage() {
-  const [tab, setTab] = useState<Tab>("servers");
+  const [params] = useSearchParams();
+  const asked = params.get("tab") as Tab | null;
+  const [tab, setTab] = useState<Tab>(asked && TABS.includes(asked) ? asked : "servers");
   return (
     <>
       <PageHeader title="Settings" />
@@ -49,7 +55,12 @@ export default function SettingsPage() {
       {tab === "kometa" && <KometaImport />}
       {tab === "sets" && <PosterSetImport />}
       {tab === "reset" && <TmdbReset />}
-      {tab === "general" && <GeneralTab />}
+      {tab === "general" && (
+        <div className="space-y-4">
+          <GeneralTab />
+          <TraktConnect />
+        </div>
+      )}
     </>
   );
 }
@@ -347,17 +358,12 @@ function GeneralTab() {
 
   return (
     <Card className="max-w-2xl space-y-5 p-5">
-      <Field label="TMDb API key" hint={data.tmdb_api_key.has_value ? "Saved. Enter a new key to replace it." : "Used for poster choices and TMDb list collections (coming in later phases)."}>
+      <Field label="TMDb API key" hint={data.tmdb_api_key.has_value ? "Saved. Enter a new key to replace it." : "Used for TMDb posters, lists and charts."}>
         <input className={inputClass} type="password" value={val("tmdb_api_key", "")} onChange={(e) => set("tmdb_api_key", e.target.value)} autoComplete="off" />
       </Field>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Trakt client ID">
-          <input className={inputClass} value={val("trakt_client_id", data.trakt_client_id ?? "")} onChange={(e) => set("trakt_client_id", e.target.value)} />
-        </Field>
-        <Field label="Trakt client secret" hint={data.trakt_client_secret.has_value ? "Saved." : undefined}>
-          <input className={inputClass} type="password" value={val("trakt_client_secret", "")} onChange={(e) => set("trakt_client_secret", e.target.value)} autoComplete="off" />
-        </Field>
-      </div>
+      <Field label="Trakt client ID" hint="From your app at trakt.tv/oauth/applications. Enough for public lists and charts; no client secret is needed.">
+        <input className={inputClass} value={val("trakt_client_id", data.trakt_client_id ?? "")} onChange={(e) => set("trakt_client_id", e.target.value)} />
+      </Field>
       <Field
         label="Server load"
         hint="How hard Coverarr works your media servers during imports and poster scans. Normal imports all servers at once; gentle goes one at a time with fewer parallel requests, useful if someone is streaming; fast suits capable servers."
