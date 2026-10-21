@@ -23,6 +23,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.models import Artwork, Collection, MediaItem, Server, ServerCollection, ServerItem
+from coverarr.services import cpu
 from coverarr.services.assets import artwork_path, describe_owners, taken_paths, write_asset
 from coverarr.services.jobs import JobContext
 from coverarr.services.posters import fingerprints
@@ -95,6 +96,22 @@ def prepare(name: str, data: bytes) -> Prepared | None:
     except Exception:
         fingerprint = edges = None
     return Prepared(rating_key(name) or "", name, data, suffix, width, height, fingerprint, edges)
+
+
+def _prepare_meta(name: str, data: bytes) -> Prepared | None:
+    """``prepare`` for a worker process: the image bytes aren't sent back."""
+    prepared = prepare(name, data)
+    if prepared is not None:
+        prepared.data = b""
+    return prepared
+
+
+async def prepare_async(name: str, data: bytes) -> Prepared | None:
+    """``prepare`` on the shared worker pool, so many images use every core."""
+    prepared = await cpu.run(_prepare_meta, name, data)
+    if prepared is not None:
+        prepared.data = data
+    return prepared
 
 
 async def _plex_server(session: AsyncSession, server_id: int | None) -> Server:
@@ -194,10 +211,14 @@ async def run_kometa_originals(ctx: JobContext) -> dict[str, Any]:
         if not pending:
             return
 
-        def work(entries: list[tuple[str, Any]]) -> list[Prepared | None]:
-            return [prepare(name, reader()) for name, reader in entries]
+        def read(entries: list[tuple[str, Any]]) -> list[bytes]:
+            return [reader() for _, reader in entries]
 
-        prepared = await asyncio.to_thread(work, pending)
+        # Reading the zip stays in one thread; decoding and fingerprinting use every core.
+        datas = await asyncio.to_thread(read, pending)
+        prepared = await asyncio.gather(
+            *(prepare_async(name, data) for (name, _), data in zip(pending, datas, strict=True))
+        )
         ok = []
         for (name, _), p in zip(pending, prepared, strict=True):
             if p is None:

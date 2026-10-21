@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.clients import MediaServerClient, MediaServerError, client_for
 from coverarr.models import MediaItem, Server, ServerCollection, ServerItem
+from coverarr.services import cpu
 from coverarr.services.client_pool import ClientPool
 from coverarr.services.jobs import JobContext
 from coverarr.services.load import load_profile
@@ -80,10 +81,18 @@ def fingerprints(data: bytes) -> tuple[str, str]:
     return poster_hash(data), edge_signature(data)
 
 
+def _file_edges(path: str) -> str | None:
+    try:
+        with open(path, "rb") as fh:
+            return edge_signature(fh.read())
+    except (OSError, ValueError):
+        return None
+
+
 async def _hash_one(client: MediaServerClient, remote_id: str, ref: str) -> tuple[str, str] | None:
     try:
         data = await client.fetch_poster(remote_id, ref, max_width=HASH_WIDTH)
-        return await asyncio.to_thread(fingerprints, data)
+        return await cpu.run(fingerprints, data)
     except (MediaServerError, OSError, ValueError) as exc:
         log.warning("Could not hash poster %s: %s", remote_id, exc)
         return None
@@ -145,15 +154,9 @@ async def _backfill_artwork_edges(sm: Any, ctx: JobContext) -> None:
         return
     root = config_dir()
 
-    def read(rel: str) -> str | None:
-        try:
-            return edge_signature((root / rel).read_bytes())
-        except (OSError, ValueError):
-            return None
-
     for start in range(0, len(rows), 200):
         batch = rows[start : start + 200]
-        sigs = await asyncio.to_thread(lambda b=batch: [read(r.file_path) for r in b])
+        sigs = await asyncio.gather(*(cpu.run(_file_edges, str(root / r.file_path)) for r in batch))
         updates = [{"id": r.id, "poster_edges": s} for r, s in zip(batch, sigs, strict=True) if s]
         if updates:
             async with sm() as session:
