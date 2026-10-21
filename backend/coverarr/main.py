@@ -27,7 +27,7 @@ from coverarr.config import Settings, get_settings
 from coverarr.db import dispose_engine, init_engine, run_migrations, session_factory
 from coverarr.security import current_user
 from coverarr.services.actions import run_collection_rename, run_collection_sync, run_fix_match
-from coverarr.services.artwork import run_poster_set
+from coverarr.services.artwork import run_poster_set, run_tmdb_reset
 from coverarr.services.assets import relocate_artwork
 from coverarr.services.changes import run_push_posters
 from coverarr.services.client_pool import ClientPool
@@ -76,6 +76,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
         runner.register("check_definitions", run_check_definitions)
         runner.register("push_posters", run_push_posters)
         runner.register("poster_set", run_poster_set)
+        runner.register("tmdb_reset", run_tmdb_reset)
         runner.register("store_bases", run_store_bases)
         runner.register("tidy_assets", run_tidy_assets)
         await runner.start()

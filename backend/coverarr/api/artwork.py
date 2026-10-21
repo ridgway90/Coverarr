@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
@@ -168,5 +168,25 @@ async def import_poster_set_folder(body: SetFolder, request: Request):
             "config_dir": str(_config_dir(request)),
             "keep_choices": body.keep_choices,
         },
+    )
+    return {"job_id": job.id}
+
+
+class TmdbReset(BaseModel):
+    library_id: int | None = None
+    kinds: list[Literal["movie", "show", "season"]] = ["movie", "show", "season"]
+    collections: bool = True
+    keep_own: bool = True  # keep posters you uploaded or imported as poster sets
+    only_missing: bool = False  # only titles without a base
+
+
+@router.post("/posters/reset-from-tmdb")
+async def reset_from_tmdb(body: TmdbReset, request: Request):
+    """Replace base posters with TMDb's main poster (films, shows, seasons, collections)."""
+    if not body.kinds and not body.collections:
+        raise HTTPException(422, "Pick at least one kind of poster to reset")
+    job = await request.app.state.jobs.enqueue(
+        "tmdb_reset",
+        {"config_dir": str(_config_dir(request)), **body.model_dump()},
     )
     return {"job_id": job.id}
