@@ -444,3 +444,19 @@ class PlexClient(MediaServerClient):
             except MediaServerError as exc:
                 log.warning("Could not remove the Overlay label from %s: %s", item_id, exc)
         return meta.get("thumb")
+
+    async def maintenance(self, action: str) -> str:
+        """Plex's own clean-up tasks (they run in the background on the server)."""
+        if action == "clean_bundles":
+            # Deletes metadata bundles (artwork and all) of items no longer in the library.
+            await self._request("PUT", "/library/clean/bundles", params={"async": 1})
+            return "Clean Bundles started"
+        if action == "optimize":
+            await self._request("PUT", "/library/optimize", params={"async": 1})
+            return "Optimize Database started"
+        if action == "empty_trash":
+            libraries = await self.libraries()
+            for lib in libraries:
+                await self._request("PUT", f"/library/sections/{lib.id}/emptyTrash")
+            return f"Emptied the trash of {len(libraries)} libraries"
+        raise ValueError(f"Unknown Plex maintenance task {action!r}")

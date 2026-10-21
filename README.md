@@ -54,6 +54,23 @@ possible: it tracks what each server already has and only touches what actually 
     upgrade) or overlay settings changed are rendered and pushed again. Rendering uses every
     CPU core but one; rendered posters are cached in `/config/cache/rendered`.
   - After updating to this version, run an **import** once so media info is collected.
+- **Housekeeping** (sidebar → Housekeeping), for making Coverarr the source of truth:
+  - *Without a base*: a suggested base for every film, show, season and collection that has
+    none, with its reasons and a confidence (like the mismatch suggestions). It's the artwork
+    most servers agree on, preferring a copy without overlays (Kometa's label, Coverarr's
+    overlays, or top/bottom edges darker than just inside them). Accept one, pick another
+    server's, or accept every high-confidence suggestion at once.
+  - *Stored bases*: accepted bases (and any base still pointing at a server) are downloaded
+    into the assets folder as the title's **Original** artwork, so a later change on the
+    server can't change your base.
+  - *Tidy stored posters*: Check, then Fix: misnamed or misplaced files, duplicate images for a
+    title (the chosen one is kept), files nothing uses (old posters), records whose file is
+    gone, empty folders.
+  - *Force push*: upload every chosen poster to every server again, in case one is stale.
+  - *Server clean-up*: Plex's Clean Bundles, Optimize Database and Empty Trash. Plex keeps
+    every poster ever uploaded; Kometa's [ImageMaid](https://github.com/Kometa-Team/ImageMaid)
+    removes the unused ones, since that needs Plex's data folder. Jellyfin and Emby replace the
+    image, so nothing piles up.
 - **Changes and Push.** Choosing a base poster (a server's poster or a Kometa original) only
   records the choice. The *Changes* page lists every title, season, episode and collection
   whose chosen poster isn't on every server yet, and why (different poster, still has

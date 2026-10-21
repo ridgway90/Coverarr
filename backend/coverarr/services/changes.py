@@ -208,7 +208,9 @@ def _art_poster(art: Any) -> dict[str, Any]:
     }
 
 
-def _assess(change: Change, rows: list[Any], artworks: dict[int, Any], threshold: int) -> None:
+def _assess(
+    change: Change, rows: list[Any], artworks: dict[int, Any], threshold: int, force: bool = False
+) -> None:
     """Fill in ``change.base`` and the servers that still need the base poster."""
     key = "server_item_id" if change.target == "item" else "server_collection_id"
     kind, _, ref = change.source.partition(":")
@@ -261,6 +263,8 @@ def _assess(change: Change, rows: list[Any], artworks: dict[int, Any], threshold
             # Same artwork, but gradients or badges at the top/bottom that the base doesn't
             # have (e.g. Kometa overlays whose label was removed).
             reason = "has overlays"
+        elif force:
+            reason = "force push"
         else:
             continue
         change.servers.append(
@@ -276,6 +280,7 @@ def _assess_overlay(
     layers: list[dict],
     setup: OverlaySetup,
     kinds: dict[int, str],
+    force: bool = False,
 ) -> None:
     """Like ``_assess``, for a title that gets overlays."""
     kind, _, ref = change.source.partition(":") if change.source else ("", "", "")
@@ -314,9 +319,12 @@ def _assess_overlay(
     change.render = Render(change.kind, base, plan, plan.key(base))
     wanted = change.render.pushed_key
     for row in rows:
-        if row.pushed_key == wanted and row.pushed_ref == row.poster_ref and row.poster_ref:
+        in_sync = row.pushed_key == wanted and row.pushed_ref == row.poster_ref and row.poster_ref
+        if in_sync and not force:
             continue
-        if not row.poster_ref:
+        if in_sync:
+            reason = "force push"
+        elif not row.poster_ref:
             reason = "no poster"
         elif _shows_render(row):
             reason = "overlays out of date"
@@ -390,8 +398,10 @@ async def compute_changes(
     collection_ids: list[int] | None = None,
     items: bool = True,
     collections: bool = True,
+    force: bool = False,
 ) -> list[Change]:
-    """Every pending poster change (optionally narrowed), in a stable order."""
+    """Every pending poster change (optionally narrowed), in a stable order. With ``force``,
+    every server gets the poster again even if it already shows it."""
     threshold = int(await get_setting(session, "poster_match_threshold"))
     enabled = select(Server.id).where(Server.enabled.is_(True))
     kinds = dict((await session.execute(select(Server.id, Server.kind))).all())
@@ -428,9 +438,9 @@ async def compute_changes(
                 )
                 layers = setup.layers_for(t.library_id, t.kind)
                 if layers is not None:
-                    _assess_overlay(change, rows[t.id], arts, t.facts, layers, setup, kinds)
+                    _assess_overlay(change, rows[t.id], arts, t.facts, layers, setup, kinds, force)
                 else:
-                    _assess(change, rows[t.id], arts, threshold)
+                    _assess(change, rows[t.id], arts, threshold, force)
                 if change.servers or change.problem:
                     changes.append(change)
 
@@ -471,7 +481,7 @@ async def compute_changes(
                     None,
                     None,
                 )
-                _assess(change, crows[c.id], arts, threshold)
+                _assess(change, crows[c.id], arts, threshold, force)
                 if change.servers or change.problem:
                     changes.append(change)
 
@@ -562,15 +572,17 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
     config_dir = Path(ctx.params["config_dir"])
     item_ids = ctx.params.get("media_item_ids")
     coll_ids = ctx.params.get("collection_ids")
+    force = bool(ctx.params.get("force"))
+    library_id = ctx.params.get("library_id")
     async with sm() as session:
         if item_ids is None and coll_ids is None:
-            changes = await compute_changes(session)
+            changes = await compute_changes(session, library_id=library_id, force=force)
         else:
             changes = []
             if item_ids:
-                changes += await compute_changes(session, media_item_ids=item_ids)
+                changes += await compute_changes(session, media_item_ids=item_ids, force=force)
             if coll_ids:
-                changes += await compute_changes(session, collection_ids=coll_ids)
+                changes += await compute_changes(session, collection_ids=coll_ids, force=force)
         changes = [c for c in changes if not c.problem]
         servers = {s.id: s for s in await session.scalars(select(Server))}
         profile = await load_profile(session)

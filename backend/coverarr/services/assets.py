@@ -152,11 +152,14 @@ async def taken_paths(session: AsyncSession) -> dict[str, str]:
     return {art.file_path: owner_key(art) for art in await session.scalars(select(Artwork))}
 
 
-async def relocate_artwork(sm: async_sessionmaker[AsyncSession], config_dir: Path) -> int:
+async def relocate_artwork(
+    sm: async_sessionmaker[AsyncSession], config_dir: Path, *, force: bool = False
+) -> int:
     """Move artwork from older layouts (e.g. ``assets/kometa/m12 - Title.jpg``) into the
-    current one. Runs once; returns how many files moved."""
+    current one. Runs once at startup; ``force`` (housekeeping) checks every file again, e.g.
+    after titles were renamed. Returns how many files moved."""
     async with sm() as session:
-        if (await get_setting(session, "artwork_layout", 1)) >= LAYOUT_VERSION:
+        if not force and (await get_setting(session, "artwork_layout", 1)) >= LAYOUT_VERSION:
             return 0
         arts = list(await session.scalars(select(Artwork)))
         owners = await describe_owners(

@@ -14,6 +14,7 @@ from coverarr.api import (
     artwork,
     auth,
     changes,
+    housekeeping,
     jobs,
     kometa,
     library,
@@ -31,6 +32,7 @@ from coverarr.services.assets import relocate_artwork
 from coverarr.services.changes import run_push_posters
 from coverarr.services.client_pool import ClientPool
 from coverarr.services.definitions import run_check_definitions
+from coverarr.services.housekeeping import run_store_bases, run_tidy_assets
 from coverarr.services.importer import run_import, run_rematch
 from coverarr.services.jobs import JobRunner
 from coverarr.services.kometa import run_kometa_originals
@@ -74,6 +76,8 @@ def create_app(config: Settings | None = None) -> FastAPI:
         runner.register("check_definitions", run_check_definitions)
         runner.register("push_posters", run_push_posters)
         runner.register("poster_set", run_poster_set)
+        runner.register("store_bases", run_store_bases)
+        runner.register("tidy_assets", run_tidy_assets)
         await runner.start()
         app.state.jobs = runner
         app.state.client_pool = ClientPool()
@@ -89,7 +93,18 @@ def create_app(config: Settings | None = None) -> FastAPI:
     app.state.config = config
     app.include_router(auth.router)
     protected = [Depends(current_user)]
-    for module in (servers, settings, library, review, jobs, kometa, changes, artwork, overlays):
+    for module in (
+        servers,
+        settings,
+        library,
+        review,
+        jobs,
+        kometa,
+        changes,
+        artwork,
+        overlays,
+        housekeeping,
+    ):
         app.include_router(module.router, dependencies=protected)
 
     @app.get("/api/health")

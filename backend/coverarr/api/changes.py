@@ -62,9 +62,19 @@ class Targets(BaseModel):
     collection_ids: list[int] | None = None
 
 
+class PushRequest(Targets):
+    # Upload to every server even where the poster already looks right.
+    force: bool = False
+    library_id: int | None = None
+
+
 @router.post("/push")
-async def push(body: Targets, request: Request):
+async def push(body: PushRequest, request: Request):
     params: dict = {"config_dir": str(request.app.state.config.config_dir)}
+    if body.force:
+        params["force"] = True
+    if body.library_id is not None:
+        params["library_id"] = body.library_id
     if body.media_item_ids is not None or body.collection_ids is not None:
         params["media_item_ids"] = body.media_item_ids or []
         params["collection_ids"] = body.collection_ids or []

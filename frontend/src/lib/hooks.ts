@@ -55,6 +55,8 @@ export const JOB_LABELS: Record<string, string> = {
   check_definitions: "Check collection lists",
   push_posters: "Push posters",
   poster_set: "Import poster set",
+  store_bases: "Store base posters",
+  tidy_assets: "Tidy stored posters",
 };
 
 export function jobLabel(job: Pick<Job, "kind">): string {
