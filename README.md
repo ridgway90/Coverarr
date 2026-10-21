@@ -38,6 +38,10 @@ possible: it tracks what each server already has and only touches what actually 
   such as a set you've downloaded from ThePosterDB: `Hot Fuzz (2007).jpg`,
   `Cornetto Collection.jpg`, `Spaced (1999) - Season 1.jpg`. ThePosterDB has no API and its
   terms forbid automated downloads, so download the set yourself and import the zip.
+  On a film, show or collection page, **Upload poster set** imports a zip for just that title:
+  a show's poster and its seasons (files may be named just `Season 1.jpg` or `Specials.jpg`),
+  or a collection's poster and its films. A single file named some other way
+  (`poster.jpg`) becomes that title's poster; files for other titles are listed, not applied.
 - **Reset posters from TMDb** (Settings → Reset posters): replaces base posters with TMDb's
   main English poster for every film, show, season and collection (or one library). By default
   your uploads and poster-set imports are kept; you can also limit it to titles without a base.

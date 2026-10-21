@@ -122,7 +122,7 @@ export default function ItemDetailPage() {
             posterSource={item.poster_source}
             onChoose={(id) => choose.mutate(id)}
             busy={choose.isPending}
-            owner={{ kind: "items", id: item.id }}
+            owner={{ kind: "items", id: item.id, sets: item.kind === "movie" || item.kind === "show" }}
           />
           <ErrorNote error={choose.error} />
         </Card>
