@@ -110,6 +110,7 @@ class Scheduler:
     async def tick(self, now: datetime | None = None) -> list[str]:
         """Queue whatever is due; returns the job kinds queued."""
         from coverarr.services.arr import automation_settings
+        from coverarr.services.settings_store import set_setting
 
         now = now or datetime.now()
         queued: list[str] = []
@@ -123,6 +124,8 @@ class Scheduler:
                 now,
             ):
                 queued.append("safety_scan")
+                # It syncs the collections too, so the daily sync can wait for tomorrow.
+                await set_setting(session, COLLECTIONS_LAST_KEY, now.isoformat(timespec="seconds"))
             # The weekly scan syncs the collections itself.
             elif daily["enabled"] and await _due(
                 session, COLLECTIONS_LAST_KEY, daily_since(now, int(daily["hour"])), now

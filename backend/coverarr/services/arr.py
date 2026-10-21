@@ -344,8 +344,12 @@ async def run_arr_event(ctx: JobContext) -> dict[str, Any]:
 
     # Look for the title on each server.
     found: list[Found] = []
-    waiting: list[str] = []
+    # A server waits only if none of its libraries has the title yet: a new film is in
+    # "Films" or "4K Films", never both.
+    tried: dict[int, str] = {}
+    ready: set[int] = set()
     for server, sl in targets:
+        tried[server.id] = server.name
         si = existing.get(sl.id)
         remote: RemoteItem | None = None
         children: list[RemoteItem] = []
@@ -364,13 +368,14 @@ async def run_arr_event(ctx: JobContext) -> dict[str, Any]:
                     children = await client.show_children(remote.id)
         except MediaServerError as exc:
             await ctx.log(f"{server.name}: {exc}")
-            waiting.append(server.name)
             continue
         if si is None and remote is None and event.action == "delete":
+            ready.add(server.id)
             continue
-        if not _has_files(event, remote, children):
-            waiting.append(server.name)
+        if _has_files(event, remote, children):
+            ready.add(server.id)
         found.append((server, sl, si, remote, children))
+    waiting = [name for server_id, name in tried.items() if server_id not in ready]
 
     if waiting and attempt <= len(RETRY_DELAYS) and queue is not None:
         delay = RETRY_DELAYS[attempt - 1]

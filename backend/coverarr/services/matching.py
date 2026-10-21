@@ -231,7 +231,7 @@ async def match_top_level(
             link_updates.append({"id": row.id, "media_item_id": mi})
     await _bulk_update(session, ServerItem, link_updates)
     stats.linked += len(link_updates)
-    stats.by_kind[kind] = len(members)
+    stats.by_kind[kind] += len(members)
 
     orphans = set(existing) - set(members)
     if orphans:
@@ -359,8 +359,8 @@ async def match_children(
     await _bulk_update(session, ServerItem, link_updates)
     stats.linked += len(link_updates)
     stats.unlinked += sum(1 for u in link_updates if u["media_item_id"] is None)
-    stats.by_kind["season"] = len({v for v in existing_seasons.values() if v in used})
-    stats.by_kind["episode"] = len({v for v in existing_episodes.values() if v in used})
+    stats.by_kind["season"] += len({v for v in existing_seasons.values() if v in used})
+    stats.by_kind["episode"] += len({v for v in existing_episodes.values() if v in used})
 
     orphans = (set(existing_seasons.values()) | set(existing_episodes.values())) - used
     if orphans:
@@ -491,6 +491,17 @@ async def match_all(session: AsyncSession, library_ids: list[int] | None = None)
     if library_ids is not None:
         query = query.where(Library.id.in_(library_ids))
     libraries = list(await session.scalars(query))
+    # Rows of a disabled or unmapped server library aren't matched any more: unlink them, or
+    # pushes and review would keep treating that copy as part of the title.
+    off = select(ServerLibrary.id).where(
+        (ServerLibrary.enabled.is_(False)) | (ServerLibrary.library_id.is_(None))
+    )
+    dropped = await session.execute(
+        update(ServerItem)
+        .where(ServerItem.server_library_id.in_(off), ServerItem.media_item_id.is_not(None))
+        .values(media_item_id=None)
+    )
+    stats.unlinked += dropped.rowcount or 0
     for library in libraries:
         sl_ids = await _library_server_libs(session, library.id)
         shows = await match_top_level(session, library, sl_ids, stats)

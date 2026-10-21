@@ -74,7 +74,11 @@ async def test_server(body: TestRequest, session: AsyncSession = Depends(get_ses
     token = body.token
     if not token and body.id:
         stored = await session.get(Server, body.id)
-        token = stored.token if stored else None
+        # The saved token only goes to the saved server, never to a newly typed address.
+        if stored and body.url.rstrip("/") == stored.url.rstrip("/"):
+            token = stored.token
+        elif stored:
+            raise HTTPException(422, "Enter the token again to test a different address")
     if not token:
         raise HTTPException(422, "A token / API key is required")
     try:

@@ -162,23 +162,24 @@ async def update_definition(
     if definition is None:
         raise HTTPException(404, "Definition not found")
     sent = body.model_fields_set
+    old_library = definition.library_id
+    new_library = body.library_id if "library_id" in sent else old_library
+    name = body.name.strip() if body.name is not None else definition.name
     if "library_id" in sent:
         await _check_library(session, body.library_id)
-        definition.library_id = body.library_id
-        definition.check_result = None
+    if new_library != old_library or name != definition.name:
+        await _check_name_free(session, new_library, name, definition.id)
     rename_job = None
-    if body.name is not None and body.name.strip() != definition.name:
-        name = body.name.strip()
-        await _check_name_free(session, definition.library_id, name, definition.id)
-        # The collection on the servers follows the new name.
+    if name != definition.name:
+        # The collection on the servers follows the new name (it stays in its old library).
         coll = (
             await session.scalar(
                 select(Collection).where(
-                    Collection.library_id == definition.library_id,
+                    Collection.library_id == old_library,
                     Collection.normalized_name == normalize_collection_name(definition.name),
                 )
             )
-            if definition.library_id is not None
+            if old_library is not None and old_library == new_library
             else None
         )
         definition.name = name
@@ -188,6 +189,9 @@ async def update_definition(
                     "collection_rename", {"collection_id": coll.id, "name": name}
                 )
             ).id
+    if new_library != old_library:
+        definition.library_id = new_library
+        definition.check_result = None
     if body.builders is not None:
         if not body.builders:
             raise HTTPException(422, "Add at least one list")

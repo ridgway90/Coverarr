@@ -130,6 +130,8 @@ class ListClient:
         self.trakt_token = trakt_token
         # Set when Trakt refused the sign-in token (lists are then read without it).
         self.trakt_token_rejected = False
+        # Library id -> {"tmdb:123": media item}, built once per job, not per collection.
+        self.library_index: dict[int, dict[str, int]] = {}
         self._http = httpx.AsyncClient(
             timeout=30, headers={"User-Agent": USER_AGENT}, transport=transport
         )

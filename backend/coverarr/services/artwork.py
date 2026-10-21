@@ -377,6 +377,15 @@ async def _set_scope(session: AsyncSession, params: dict[str, Any]) -> SetScope 
 
 async def run_poster_set(ctx: JobContext) -> dict[str, Any]:
     """Import a folder or zip of posters named by title (e.g. a ThePosterDB set)."""
+    try:
+        return await _poster_set(ctx)
+    finally:
+        # An uploaded zip goes however the job ends.
+        if ctx.params.get("remove_after"):
+            await asyncio.to_thread(Path(ctx.params["source"]).unlink, missing_ok=True)
+
+
+async def _poster_set(ctx: JobContext) -> dict[str, Any]:
     config_dir = Path(ctx.params["config_dir"])
     source_path = Path(ctx.params["source"])
     keep_choices = bool(ctx.params.get("keep_choices"))
@@ -491,8 +500,6 @@ async def run_poster_set(ctx: JobContext) -> dict[str, Any]:
             await session.commit()
     finally:
         source.close()
-        if ctx.params.get("remove_after"):
-            await asyncio.to_thread(source_path.unlink, missing_ok=True)
 
     await ctx.log(
         f"Imported {counts['imported']} posters from {len(matched)} files; "

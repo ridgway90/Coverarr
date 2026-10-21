@@ -48,7 +48,28 @@ def _load(text: str, filename: str) -> dict[str, Any]:
         return {}
     if not isinstance(data, dict):
         raise KometaYamlError(f"{filename}: expected a mapping at the top level")
+    _check_size(data, filename)
     return data
+
+
+# Values a file may hold once its anchors are expanded. Real configs are a few thousand; a
+# few hundred bytes of nested aliases can expand to billions ("billion laughs").
+MAX_EXPANDED = 200_000
+
+
+def _check_size(data: Any, filename: str) -> None:
+    budget = MAX_EXPANDED
+    stack = [data]
+    while stack:
+        node = stack.pop()
+        budget -= 1
+        if budget < 0:
+            raise KometaYamlError(f"{filename}: too large once its anchors (*aliases) are expanded")
+        if isinstance(node, dict):
+            stack.extend(node.keys())
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
 
 
 def _values(raw: Any) -> list[str]:

@@ -101,12 +101,12 @@ async def import_yaml(
         text = raw.decode("utf-8", errors="replace")
         try:
             if is_config_file(text):
-                config = parse_config(text, name)
+                config = await asyncio.to_thread(parse_config, text, name)
                 files_by_library.update(config.files_by_library)
                 if not skip_keys:
                     keys_imported += await _import_keys(session, config)
             else:
-                parsed += parse_collection_file(text, name)
+                parsed += await asyncio.to_thread(parse_collection_file, text, name)
         except KometaYamlError as exc:
             errors.append(str(exc))
     saved = await save_definitions(session, parsed, files_by_library, library_id)

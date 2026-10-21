@@ -3,7 +3,22 @@ import { CheckCircle2, Layers, Search, Upload, Wrench } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import CancelJob from "../components/CancelJob";
-import { Button, Card, ErrorNote, PageHeader, Pagination, Poster, ServerChip, Spinner, Tabs, cx, inputClass, selectClass, useDebounced } from "../components/ui";
+import {
+  Button,
+  Card,
+  ErrorNote,
+  PageHeader,
+  Pagination,
+  Poster,
+  ServerChip,
+  Spinner,
+  Tabs,
+  cx,
+  inputClass,
+  selectClass,
+  useClampPage,
+  useDebounced,
+} from "../components/ui";
 import { api, qs, type Job, type PosterRef } from "../lib/api";
 import { useJobAction, useLibraries, useServerMap, useServers } from "../lib/hooks";
 
@@ -158,6 +173,7 @@ function BasesCard() {
     queryFn: () => api.get<BasesPage>(`/api/housekeeping/bases${qs({ library_id: libraryId, kind, confidence, q, page, page_size: 30 })}`),
     placeholderData: keepPreviousData,
   });
+  useClampPage(page, data, setPage);
   const refresh = () => {
     for (const key of REFRESH) qc.invalidateQueries({ queryKey: [key] });
   };

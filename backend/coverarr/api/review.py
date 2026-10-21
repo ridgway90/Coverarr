@@ -4,7 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.api.library import _issue_out
@@ -73,6 +73,8 @@ class BulkAction(BaseModel):
     all_of_type: IssueType | None = None
     library_id: int | None = None
     server_id: int | None = None  # for choose_poster and to limit collection pushes
+    # With all_of_type: only issues whose title matches, as the list shows them.
+    q: str | None = None
 
 
 EXPECTED_TYPE = {
@@ -93,6 +95,8 @@ async def bulk_action(
         query = select(Issue).where(Issue.type == body.all_of_type, Issue.status == status)
         if body.library_id is not None:
             query = query.where(Issue.library_id == body.library_id)
+        if body.q and body.q.strip():
+            query = query.where(Issue.title.ilike(f"%{body.q.strip()}%"))
     else:
         raise HTTPException(422, "Give issue_ids or all_of_type")
     issues = list(await session.scalars(query))
@@ -122,25 +126,40 @@ async def bulk_action(
     # choose_poster: record which server's poster is the clean base for each item.
     if body.server_id is None or await session.get(Server, body.server_id) is None:
         raise HTTPException(422, "choose_poster needs a valid server_id")
-    updated = skipped = 0
+    usable = []
     for issue in issues:
         entry = next(
             (s for s in issue.details.get("servers", []) if s["server_id"] == body.server_id), None
         )
-        if not entry or not entry.get("has_poster"):
-            skipped += 1
-            continue
-        target = (
-            await session.get(MediaItem, issue.media_item_id)
-            if issue.media_item_id
-            else await session.get(Collection, issue.collection_id)
-        )
-        if target is None:
-            skipped += 1
-            continue
-        target.poster_source = f"server:{body.server_id}"
-        await session.delete(issue)
-        updated += 1
+        if entry and entry.get("has_poster"):
+            usable.append(issue)
+    # Owners that still exist, a query per type rather than per issue.
+    alive: dict[str, set[int]] = {}
+    for name, model, ids in (
+        ("item", MediaItem, {i.media_item_id for i in usable if i.media_item_id}),
+        ("collection", Collection, {i.collection_id for i in usable if not i.media_item_id}),
+    ):
+        alive[name] = set()
+        for chunk in (sorted(ids)[n : n + 900] for n in range(0, len(ids), 900)):
+            alive[name] |= set(await session.scalars(select(model.id).where(model.id.in_(chunk))))
+    done = [
+        i
+        for i in usable
+        if (i.media_item_id in alive["item"])
+        or (not i.media_item_id and i.collection_id in alive["collection"])
+    ]
+    source = f"server:{body.server_id}"
+    for model, ids in (
+        (MediaItem, sorted({i.media_item_id for i in done if i.media_item_id})),
+        (Collection, sorted({i.collection_id for i in done if not i.media_item_id})),
+    ):
+        for n in range(0, len(ids), 900):
+            await session.execute(
+                update(model).where(model.id.in_(ids[n : n + 900])).values(poster_source=source)
+            )
+    for n in range(0, len(done), 900):
+        await session.execute(delete(Issue).where(Issue.id.in_([i.id for i in done[n : n + 900]])))
+    updated, skipped = len(done), len(issues) - len(done)
     await session.commit()
     return {"updated": updated, "skipped": skipped}
 

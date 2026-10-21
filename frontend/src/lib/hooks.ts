@@ -84,9 +84,10 @@ export function useJobAction<T>(start: (arg: T) => Promise<{ job_id: number }>, 
     queryKey: ["jobs", jobId],
     queryFn: () => api.get<Job>(`/api/jobs/${jobId}`),
     enabled: jobId !== null,
-    refetchInterval: (q) => (q.state.data && FINISHED.includes(q.state.data.status) ? false : 800),
+    // Stop when the job ends, or when it can't be read any more (e.g. gone after a restart).
+    refetchInterval: (q) => (q.state.status === "error" || (q.state.data && FINISHED.includes(q.state.data.status)) ? false : 800),
   });
-  const finished = Boolean(job.data && FINISHED.includes(job.data.status));
+  const finished = Boolean(job.data && FINISHED.includes(job.data.status)) || job.isError;
   // Refresh once per finished job (the key list is a new array on every render).
   const handled = useRef<number | null>(null);
   const keys = useRef(refresh);

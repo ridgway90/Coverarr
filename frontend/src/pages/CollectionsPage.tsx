@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { FolderX, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   AlphabetBar,
@@ -29,6 +29,16 @@ export default function CollectionsPage() {
   const servers = useServerMap();
   const [search, setSearch] = useState(params.get("q") ?? "");
   const q = useDebounced(search);
+
+  // Keep the search in the address, so Back (and a reload) comes back to the same list.
+  useEffect(() => {
+    if ((params.get("q") ?? "") === q) return;
+    const next = new URLSearchParams(params);
+    if (q) next.set("q", q);
+    else next.delete("q");
+    next.delete("page");
+    setParams(next, { replace: true });
+  }, [q]);
   const libraries = libs?.libraries ?? [];
   const libraryId = Number(params.get("library") ?? libraries[0]?.id ?? 0);
   const issuesOnly = params.get("issues") === "1";

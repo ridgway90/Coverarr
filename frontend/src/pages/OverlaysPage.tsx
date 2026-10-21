@@ -317,11 +317,20 @@ function Preview({ libraryId, level, layers }: { libraryId: number; level: strin
         const detail = await resp.json().catch(() => ({}));
         throw new Error(detail.detail ?? `Preview failed (${resp.status})`);
       }
-      const missing = resp.headers.get("X-Overlay-Missing") ?? "";
-      return { url: URL.createObjectURL(await resp.blob()), missing };
+      const missing = decodeURIComponent(resp.headers.get("X-Overlay-Missing") ?? "");
+      return { blob: await resp.blob(), missing };
     },
     staleTime: Infinity,
+    gcTime: 60_000,
   });
+  // The image URL lives only while it's shown, so old previews don't pile up in memory.
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!preview.data) return;
+    const next = URL.createObjectURL(preview.data.blob);
+    setUrl(next);
+    return () => URL.revokeObjectURL(next);
+  }, [preview.data]);
   const sample = samples.data?.find((s) => s.id === sampleId);
   return (
     <div>
@@ -336,7 +345,7 @@ function Preview({ libraryId, level, layers }: { libraryId: number; level: strin
         ))}
       </select>
       <div className={cx("relative overflow-hidden rounded-md bg-panel-2", level === "episode" ? "aspect-video" : "aspect-[2/3]")}>
-        {preview.data && <img src={preview.data.url} alt={sample?.title ?? "Preview"} className="h-full w-full object-cover" />}
+        {url && <img src={url} alt={sample?.title ?? "Preview"} className="h-full w-full object-cover" />}
         {preview.isFetching && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/30">
             <Spinner />

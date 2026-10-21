@@ -15,7 +15,7 @@ import traceback
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from coverarr.models import Job, utcnow
@@ -91,13 +91,14 @@ class JobRunner:
             self._worker = None
 
     async def enqueue(self, kind: str, params: dict[str, Any] | None = None) -> Job:
-        """Queue a job, or return the identical job that is already waiting or running."""
+        """Queue a job, or return the identical job already waiting. One that is running now
+        is not reused: it may have read its work before the change that asks for this one."""
         if kind not in self.handlers:
             raise ValueError(f"Unknown job kind {kind!r}")
         params = params or {}
         async with self.sessionmaker() as session:
             active = await session.scalars(
-                select(Job).where(Job.kind == kind, Job.status.in_(("queued", "running")))
+                select(Job).where(Job.kind == kind, Job.status == "queued")
             )
             for job in active:
                 if job.params == params:
@@ -117,11 +118,20 @@ class JobRunner:
             if job is None or job.status not in ("queued", "running"):
                 return False
             if job.status == "queued":
-                job.status = "cancelled"
-                job.message = "Cancelled"
-                job.finished_at = utcnow()
+                # Only if the worker hasn't just picked it up.
+                done = await session.execute(
+                    update(Job)
+                    .where(Job.id == job_id, Job.status == "queued")
+                    .values(status="cancelled", message="Cancelled", finished_at=utcnow())
+                )
                 await session.commit()
-                return True
+                if done.rowcount:
+                    return True
+        # The worker may be between marking it running and starting the handler.
+        for _ in range(50):
+            if self._running and self._running[0] == job_id:
+                break
+            await asyncio.sleep(0.02)
         if self._running and self._running[0] == job_id:
             self._cancelling.add(job_id)
             self._running[1].cancel()
@@ -144,44 +154,70 @@ class JobRunner:
 
     async def _execute(self, job_id: int) -> None:
         async with self.sessionmaker() as session:
-            job = await session.get(Job, job_id)
-            if job is None or job.status != "queued":
-                return
-            job.status = "running"
-            job.started_at = utcnow()
-            kind, params = job.kind, dict(job.params or {})
+            claimed = await session.execute(
+                update(Job)
+                .where(Job.id == job_id, Job.status == "queued")
+                .values(status="running", started_at=utcnow())
+            )
+            job = await session.get(Job, job_id) if claimed.rowcount else None
             await session.commit()
+            if job is None:
+                return
+            kind, params = job.kind, dict(job.params or {})
 
         ctx = JobContext(job_id, params, self.sessionmaker)
         self.live[job_id] = ctx
         status, result, error = "succeeded", None, None
-        task = asyncio.create_task(self.handlers[kind](ctx))
-        self._running = (job_id, task)
         try:
-            result = await task
-        except asyncio.CancelledError:
-            if job_id not in self._cancelling:  # the app is shutting down
-                task.cancel()
-                raise
-            status = "cancelled"
-            ctx.log_lines.append("Cancelled")
-        except Exception as exc:
-            log.exception("Job %s (%s) failed", job_id, kind)
-            status, error = "failed", f"{exc}\n\n{traceback.format_exc()}"
+            handler = self.handlers.get(kind)
+            if handler is None:
+                raise RuntimeError(f"Coverarr no longer has a job called {kind!r}")
+            task = asyncio.create_task(handler(ctx))
+            self._running = (job_id, task)
+            try:
+                result = await task
+            except asyncio.CancelledError:
+                if job_id not in self._cancelling:  # the app is shutting down
+                    task.cancel()
+                    raise
+                status = "cancelled"
+                ctx.log_lines.append("Cancelled")
+            except Exception as exc:
+                log.exception("Job %s (%s) failed", job_id, kind)
+                status, error = "failed", f"{exc}\n\n{traceback.format_exc()}"
+                ctx.log_lines.append(f"Failed: {exc}")
+        except RuntimeError as exc:
+            status, error = "failed", str(exc)
             ctx.log_lines.append(f"Failed: {exc}")
 
-        async with self.sessionmaker() as session:
-            job = await session.get(Job, job_id)
-            if job is None:
+        try:
+            await self._finish(job_id, ctx, status, result, error)
+        finally:
+            self.live.pop(job_id, None)
+            self._running = None
+            self._cancelling.discard(job_id)
+
+    async def _finish(
+        self, job_id: int, ctx: JobContext, status: str, result: Any, error: str | None
+    ) -> None:
+        """Record how the job ended, retrying if the database is busy for a moment."""
+        for attempt in range(5):
+            try:
+                async with self.sessionmaker() as session:
+                    job = await session.get(Job, job_id)
+                    if job is None:
+                        return
+                    job.status = status
+                    job.result = result
+                    job.error = error
+                    job.log = ctx.log_lines
+                    job.message = ctx.message if status == "succeeded" else status.capitalize()
+                    job.progress = 1.0 if status == "succeeded" else ctx.fraction
+                    job.finished_at = utcnow()
+                    await session.commit()
                 return
-            job.status = status
-            job.result = result
-            job.error = error
-            job.log = ctx.log_lines
-            job.message = ctx.message if status == "succeeded" else status.capitalize()
-            job.progress = 1.0 if status == "succeeded" else ctx.fraction
-            job.finished_at = utcnow()
-            await session.commit()
-        self.live.pop(job_id, None)
-        self._running = None
-        self._cancelling.discard(job_id)
+            except Exception:
+                if attempt == 4:
+                    raise
+                log.warning("Couldn't record the end of job %s; retrying", job_id)
+                await asyncio.sleep(2)

@@ -33,6 +33,9 @@ log = logging.getLogger(__name__)
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 FORMAT_SUFFIX = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp"}
 BATCH = 200
+# Larger files aren't posters; skipping them by their listed size means a zip bomb is never
+# unpacked into memory (zipfile stops reading an entry at its listed size).
+MAX_ENTRY_BYTES = 25 * 1024 * 1024
 
 
 def rating_key(name: str) -> str | None:
@@ -56,13 +59,15 @@ class Source:
             return [
                 (str(p.relative_to(self.path)), p.read_bytes)
                 for p in sorted(self.path.rglob("*"))
-                if p.is_file()
+                if p.is_file() and p.stat().st_size <= MAX_ENTRY_BYTES
             ]
         archive = self._zip
         return [
             (info.filename, (lambda i=info: archive.read(i)))
             for info in archive.infolist()
-            if not info.is_dir() and "__MACOSX" not in info.filename
+            if not info.is_dir()
+            and "__MACOSX" not in info.filename
+            and info.file_size <= MAX_ENTRY_BYTES
         ]
 
     def close(self) -> None:
@@ -127,9 +132,17 @@ async def _plex_server(session: AsyncSession, server_id: int | None) -> Server:
 
 
 async def run_kometa_originals(ctx: JobContext) -> dict[str, Any]:
+    try:
+        return await _kometa_originals(ctx)
+    finally:
+        # An uploaded zip goes however the job ends.
+        if ctx.params.get("remove_after"):
+            await asyncio.to_thread(Path(ctx.params["source"]).unlink, missing_ok=True)
+
+
+async def _kometa_originals(ctx: JobContext) -> dict[str, Any]:
     config_dir = Path(ctx.params["config_dir"])
     source = Path(ctx.params["source"])
-    remove_after = bool(ctx.params.get("remove_after"))
 
     async with ctx.sessionmaker() as session:
         server = await _plex_server(session, ctx.params.get("server_id"))
@@ -258,6 +271,12 @@ async def run_kometa_originals(ctx: JobContext) -> dict[str, Any]:
     plex_source = f"server:{server.id}"
     applied = kept = 0
     async with ctx.sessionmaker() as session:
+        earlier_kometa = {
+            f"artwork:{art_id}"
+            for art_id in await session.scalars(
+                select(Artwork.id).where(Artwork.source == "kometa")
+            )
+        }
         for model, mapping in ((MediaItem, imported_items), (Collection, imported_colls)):
             for ids in _chunks(list(mapping), 500):
                 rows = (
@@ -266,7 +285,8 @@ async def run_kometa_originals(ctx: JobContext) -> dict[str, Any]:
                     )
                 ).all()
                 for row_id, current in rows:
-                    if current in (None, plex_source) or str(current).startswith("artwork:"):
+                    # Replace an earlier Kometa original, never the user's own upload or pick.
+                    if current in (None, plex_source) or current in earlier_kometa:
                         await session.execute(
                             update(model)
                             .where(model.id == row_id)
@@ -280,8 +300,6 @@ async def run_kometa_originals(ctx: JobContext) -> dict[str, Any]:
         issues = await refresh_issues(session)
         await session.commit()
 
-    if remove_after:
-        await asyncio.to_thread(source.unlink, missing_ok=True)
     await ctx.log(
         f"Imported {counts['imported']} originals; {counts['unmatched']} didn't match anything "
         f"on {server.name}; used as base for {applied}, kept your own choice for {kept}"

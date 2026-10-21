@@ -1,3 +1,7 @@
+import asyncio
+import time
+from collections import deque
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -15,6 +19,22 @@ from coverarr.security import (
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# Failed logins per address: after MAX_FAILURES within FAILURE_WINDOW, wait it out.
+MAX_FAILURES = 10
+FAILURE_WINDOW = 15 * 60
+_failures: dict[str, deque[float]] = {}
+# Checked against when the username doesn't exist, so that takes as long as a wrong password.
+_DUMMY_HASH = hash_password("coverarr-not-a-user")
+# Each check is ~60 ms of CPU; a few at a time leaves the rest of the app responsive.
+_checks = asyncio.Semaphore(2)
+
+
+def _recent_failures(address: str, now: float) -> deque[float]:
+    times = _failures.setdefault(address, deque())
+    while times and times[0] < now - FAILURE_WINDOW:
+        times.popleft()
+    return times
 
 
 class Credentials(BaseModel):
@@ -65,7 +85,8 @@ async def setup(
 ):
     if await session.scalar(select(func.count(User.id))):
         raise HTTPException(status.HTTP_409_CONFLICT, "Setup already completed")
-    user = User(username=body.username.strip(), password_hash=hash_password(body.password))
+    password_hash = await asyncio.to_thread(hash_password, body.password)
+    user = User(username=body.username.strip(), password_hash=password_hash)
     session.add(user)
     await session.commit()
     _set_cookie(request, response, user)
@@ -79,9 +100,26 @@ async def login(
     response: Response,
     session: AsyncSession = Depends(get_session),
 ):
+    address = request.client.host if request.client else "?"
+    now = time.monotonic()
+    failures = _recent_failures(address, now)
+    if len(failures) >= MAX_FAILURES:
+        wait = int(failures[0] + FAILURE_WINDOW - now) // 60 + 1
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"Too many failed sign-ins; try again in {wait} minute{'s' if wait != 1 else ''}",
+        )
     user = await session.scalar(select(User).where(User.username == body.username.strip()))
-    if user is None or not verify_password(body.password, user.password_hash):
+    async with _checks:
+        ok = await asyncio.to_thread(
+            verify_password, body.password, user.password_hash if user else _DUMMY_HASH
+        )
+    if user is None or not ok:
+        failures.append(now)
+        if len(_failures) > 10_000:  # don't grow forever under a spray of addresses
+            _failures.clear()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username or password")
+    _failures.pop(address, None)
     _set_cookie(request, response, user)
     return {"username": user.username}
 

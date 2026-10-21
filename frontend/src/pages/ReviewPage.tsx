@@ -119,7 +119,8 @@ export default function ReviewPage() {
     mutationFn: (body: Record<string, unknown>) => api.post<{ updated: number; skipped?: number; job_id?: number }>("/api/review/actions", body),
     onSuccess: () => {
       setSelected(new Set());
-      for (const key of ["issues", "review", "dashboard", "items", "collections"]) qc.invalidateQueries({ queryKey: [key] });
+      for (const key of ["issues", "review", "dashboard", "items", "item", "collections", "collection", "changes"])
+        qc.invalidateQueries({ queryKey: [key] });
     },
   });
 
@@ -127,7 +128,7 @@ export default function ReviewPage() {
   const tab = TABS.find((t) => t.id === type)!;
   const ids = [...selected];
   const scope = (all: boolean) =>
-    all ? { all_of_type: type, library_id: libraryId ? Number(libraryId) : undefined } : { issue_ids: ids };
+    all ? { all_of_type: type, library_id: libraryId ? Number(libraryId) : undefined, q: q || undefined } : { issue_ids: ids };
   const total = list.data?.total ?? 0;
   const allSelected = issues.length > 0 && issues.every((i) => selected.has(i.id));
 
@@ -165,7 +166,12 @@ export default function ReviewPage() {
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="relative min-w-56 flex-1 sm:max-w-xs">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
-          <input className={inputClass + " pl-9"} placeholder="Filter by title" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input className={inputClass + " pl-9"} placeholder="Filter by title" value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              if (page > 1) setParam("page", ""); // a new search starts on page 1
+            }}
+          />
         </div>
         <select className={selectClass} value={libraryId} onChange={(e) => setParam("library", e.target.value)}>
           <option value="">All libraries</option>
