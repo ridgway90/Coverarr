@@ -374,20 +374,33 @@ def _find(folder: Path, names: list[str]) -> str | None:
     return None
 
 
+SD_RESOLUTIONS = ("576p", "480p")
+
+
 def _resolution_names(facts: dict[str, Any]) -> list[str]:
+    """Image names for a title's badge, best first: the exact one, then simpler ones (a DV+HDR
+    film falls back to the DV, then HDR, then plain badge). 576p and 480p also try the shared
+    ``sd`` badges."""
     key = resolution_key(facts)
     if not key:
         return []
     res = facts.get("resolution") or ""
-    names = [key]
-    if facts.get("dv") and facts.get("hdr"):
-        names.append(f"{res}dvhdr")
-    if facts.get("dv"):
-        names.append(f"{res}dv")
-    if facts.get("hdr") or facts.get("hdr10plus"):
-        names.append(f"{res}hdr")
-    if res:
-        names.append(res)
+
+    def chain(r: str) -> list[str]:
+        names = [f"{r}{key[len(res) :]}" if res else key]
+        if facts.get("dv") and facts.get("hdr"):
+            names.append(f"{r}dvhdr")
+        if facts.get("dv"):
+            names.append(f"{r}dv")
+        if facts.get("hdr") or facts.get("hdr10plus"):
+            names.append(f"{r}hdr")
+        if r:
+            names.append(r)
+        return names
+
+    names = chain(res)
+    if res in SD_RESOLUTIONS:
+        names += chain("sd")
     return list(dict.fromkeys(n for n in names if n))
 
 
