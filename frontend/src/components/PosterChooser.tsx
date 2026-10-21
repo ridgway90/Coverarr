@@ -9,6 +9,7 @@ const ARTWORK_LABELS: Record<string, string> = {
   upload: "Uploaded",
   tmdb: "TMDb",
   set: "Poster set",
+  original: "Original",
 };
 
 /** Posters on each server plus artwork Coverarr holds, with a button to make one the base. */

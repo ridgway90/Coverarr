@@ -11,20 +11,30 @@ choice. A change is pending for every server whose current poster doesn't look l
 Pushing uploads the base to each pending server and records the new poster ref and the base's
 fingerprint, so the change drops off the list without another scan. If someone changes the
 poster on the server afterwards, its ref changes and it shows up again after the next scan.
+
+With overlays on for a library (services/overlays.py), every title there is a target, and the
+poster to push is the base with overlays drawn on. Fingerprints can't tell those apart (they
+deliberately ignore overlays), so here a server is done only when Coverarr pushed exactly that
+render (``pushed_key``) and the server still shows it (``pushed_ref``). A title with no chosen
+base uses a clean server poster, which is saved as its "original" artwork before the first
+overlaid push, so overlays are always drawn on a clean poster and never stack.
 """
 
 from __future__ import annotations
 
 import asyncio
 import io
+import multiprocessing
+import os
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
-from sqlalchemy import String, select, type_coerce
+from sqlalchemy import String, and_, or_, select, type_coerce
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.clients import MediaServerClient, MediaServerError, client_for
@@ -39,7 +49,20 @@ from coverarr.models import (
 )
 from coverarr.services.jobs import JobContext
 from coverarr.services.load import load_profile
-from coverarr.services.posters import hamming, poster_hash
+from coverarr.services.overlays import (
+    LEVELS,
+    OverlaySetup,
+    RenderPlan,
+    config_dir,
+    library_config,
+    load_config,
+    load_setup,
+    pack_dir,
+    plan_args,
+    render_to_file,
+    rendered_path,
+)
+from coverarr.services.posters import edges_differ, fingerprints, hamming
 from coverarr.services.settings_store import get_setting
 
 CHUNK = 20
@@ -55,6 +78,20 @@ class ServerChange:
 
 
 @dataclass
+class Render:
+    """An overlaid poster to push: the base it's drawn on and the overlay files."""
+
+    level: str
+    base: str  # "artwork:<id>" or "server:<server row id>:<poster ref>"
+    plan: RenderPlan
+    key: str
+
+    @property
+    def pushed_key(self) -> str:
+        return f"r:{self.key}"
+
+
+@dataclass
 class Change:
     target: str  # item | collection
     id: int
@@ -67,8 +104,18 @@ class Change:
     base: dict[str, Any] | None
     servers: list[ServerChange] = field(default_factory=list)
     problem: str | None = None  # why it can't be pushed
+    render: Render | None = None
 
     def out(self) -> dict[str, Any]:
+        base = self.base
+        if self.render is not None:
+            base = {
+                "url": f"/api/overlays/preview/item/{self.id}?k={self.render.key}",
+                "server_id": None,
+                "has_poster": True,
+                "poster_version": self.render.key,
+                "kometa_overlay": False,
+            }
         return {
             "target": self.target,
             "id": self.id,
@@ -77,8 +124,10 @@ class Change:
             "library_id": self.library_id,
             "source": self.source,
             "top_id": self.top_id,
-            "base": self.base,
+            "base": base,
             "problem": self.problem,
+            "overlay": self.render is not None,
+            "missing_overlays": self.render.plan.missing if self.render else [],
             "servers": [
                 {"server_id": s.server_id, "reason": s.reason, "current": s.current}
                 for s in self.servers
@@ -94,7 +143,9 @@ ITEM_COLS = (
     ServerItem.poster_ref,
     ServerItem.poster_hash,
     ServerItem.poster_hash_ref,
+    ServerItem.poster_edges,
     ServerItem.pushed_ref,
+    ServerItem.pushed_key,
     # Decoding every row's labels JSON is the slowest part at scale; ask SQLite instead.
     type_coerce(ServerItem.labels, String).ilike('%"overlay"%').label("overlay_label"),
 )
@@ -105,13 +156,26 @@ COLL_COLS = (
     ServerCollection.poster_ref,
     ServerCollection.poster_hash,
     ServerCollection.poster_hash_ref,
+    ServerCollection.poster_edges,
     ServerCollection.pushed_ref,
+    ServerCollection.pushed_key,
     type_coerce(ServerCollection.labels, String).ilike('%"overlay"%').label("overlay_label"),
 )
 
 
 def _fresh_hash(row: Any) -> str | None:
     return row.poster_hash if row.poster_ref and row.poster_hash_ref == row.poster_ref else None
+
+
+def _fresh_edges(row: Any) -> str | None:
+    return row.poster_edges if row.poster_ref and row.poster_hash_ref == row.poster_ref else None
+
+
+def _shows_render(row: Any) -> bool:
+    """The server shows an overlaid poster Coverarr pushed (so it isn't a clean base)."""
+    return bool(
+        row.pushed_key and row.pushed_key.startswith("r:") and row.pushed_ref == row.poster_ref
+    )
 
 
 def _has_overlay(row: Any) -> bool:
@@ -149,13 +213,14 @@ def _assess(change: Change, rows: list[Any], artworks: dict[int, Any], threshold
     key = "server_item_id" if change.target == "item" else "server_collection_id"
     kind, _, ref = change.source.partition(":")
     base_hash: str | None = None
+    base_edges: str | None = None
     source_server: int | None = None
     if kind == "artwork":
         art = artworks.get(int(ref)) if ref.isdigit() else None
         if art is None:
             change.problem = "The chosen artwork no longer exists"
             return
-        change.base, base_hash = _art_poster(art), art.poster_hash
+        change.base, base_hash, base_edges = _art_poster(art), art.poster_hash, art.poster_edges
     elif kind == "server" and ref.isdigit():
         source_server = int(ref)
         src = next((r for r in rows if r.server_id == source_server), None)
@@ -163,12 +228,25 @@ def _assess(change: Change, rows: list[Any], artworks: dict[int, Any], threshold
             change.problem = "The server you picked the poster from no longer has it"
             return
         change.base, base_hash = _row_poster(src, key), _fresh_hash(src)
+        base_edges = _fresh_edges(src)
     else:
         change.problem = f"Unknown poster source {change.source!r}"
         return
 
     for row in rows:
         if row.server_id == source_server:
+            continue
+        if _shows_render(row):
+            # Overlays were switched off since: put the plain base back.
+            change.servers.append(
+                ServerChange(
+                    row.server_id,
+                    row.id,
+                    row.remote_id,
+                    "has Coverarr overlays",
+                    _row_poster(row, key),
+                )
+            )
             continue
         current = _fresh_hash(row)
         if not row.poster_ref:
@@ -179,10 +257,77 @@ def _assess(change: Change, rows: list[Any], artworks: dict[int, Any], threshold
             reason = "different poster"
         elif _has_overlay(row):
             reason = "has Kometa overlays"
+        elif edges_differ(_fresh_edges(row), base_edges):
+            # Same artwork, but gradients or badges at the top/bottom that the base doesn't
+            # have (e.g. Kometa overlays whose label was removed).
+            reason = "has overlays"
         else:
             continue
         change.servers.append(
             ServerChange(row.server_id, row.id, row.remote_id, reason, _row_poster(row, key))
+        )
+
+
+def _assess_overlay(
+    change: Change,
+    rows: list[Any],
+    artworks: dict[int, Any],
+    facts: dict[str, Any] | None,
+    layers: list[dict],
+    setup: OverlaySetup,
+    kinds: dict[int, str],
+) -> None:
+    """Like ``_assess``, for a title that gets overlays."""
+    kind, _, ref = change.source.partition(":") if change.source else ("", "", "")
+    if kind == "artwork":
+        art = artworks.get(int(ref)) if ref.isdigit() else None
+        if art is None:
+            change.problem = "The chosen artwork no longer exists"
+            return
+        change.base, base = _art_poster(art), f"artwork:{art.id}"
+    else:
+        if kind == "server" and ref.isdigit():
+            src = next((r for r in rows if r.server_id == int(ref) and r.poster_ref), None)
+            if src is None:
+                change.problem = "The server you picked the poster from no longer has it"
+                return
+        else:
+            # No base chosen: a clean server poster, Jellyfin/Emby before Plex (which is
+            # where Kometa draws its overlays).
+            clean = [r for r in rows if r.poster_ref and not _has_overlay(r)]
+            fresh = [r for r in clean if not _shows_render(r)]
+            fresh.sort(key=lambda r: (kinds.get(r.server_id) == "plex", r.server_id))
+            if not fresh:
+                change.problem = (
+                    "No clean poster to draw overlays on: upload one or pick one"
+                    if not clean
+                    else "Coverarr's overlays are on every server and the original wasn't kept"
+                )
+                return
+            src = fresh[0]
+        if _shows_render(src):
+            change.problem = "That server shows Coverarr's overlaid poster, not a clean one"
+            return
+        change.base = _row_poster(src, "server_item_id")
+        base = f"server:{src.id}:{src.poster_ref}"
+    plan = setup.plan(change.kind, layers, facts)
+    change.render = Render(change.kind, base, plan, plan.key(base))
+    wanted = change.render.pushed_key
+    for row in rows:
+        if row.pushed_key == wanted and row.pushed_ref == row.poster_ref and row.poster_ref:
+            continue
+        if not row.poster_ref:
+            reason = "no poster"
+        elif _shows_render(row):
+            reason = "overlays out of date"
+        elif row.pushed_key and row.pushed_ref != row.poster_ref:
+            reason = "changed on the server"
+        else:
+            reason = "needs overlays"
+        change.servers.append(
+            ServerChange(
+                row.server_id, row.id, row.remote_id, reason, _row_poster(row, "server_item_id")
+            )
         )
 
 
@@ -196,6 +341,7 @@ ITEM_INFO = (
     MediaItem.parent_id,
     MediaItem.season_number,
     MediaItem.episode_number,
+    MediaItem.facts,
 )
 
 
@@ -247,10 +393,17 @@ async def compute_changes(
     """Every pending poster change (optionally narrowed), in a stable order."""
     threshold = int(await get_setting(session, "poster_match_threshold"))
     enabled = select(Server.id).where(Server.enabled.is_(True))
+    kinds = dict((await session.execute(select(Server.id, Server.kind))).all())
+    setup = await load_setup(session)
     changes: list[Change] = []
 
     if items and collection_ids is None:
-        where = [MediaItem.poster_source.is_not(None)]
+        # Titles with a chosen base, plus everything at a level that has overlays.
+        wanted = [MediaItem.poster_source.is_not(None)] + [
+            and_(MediaItem.library_id == lib_id, MediaItem.kind.in_(list(levels)))
+            for lib_id, levels in setup.libraries.items()
+        ]
+        where = [or_(*wanted)]
         if library_id is not None:
             where.append(MediaItem.library_id == library_id)
         if media_item_ids is not None:
@@ -270,9 +423,13 @@ async def compute_changes(
             for t in targets:
                 title, top = labels[t.id]
                 change = Change(
-                    "item", t.id, title, t.kind, t.library_id, t.poster_source, top, None
+                    "item", t.id, title, t.kind, t.library_id, t.poster_source or "", top, None
                 )
-                _assess(change, rows[t.id], arts, threshold)
+                layers = setup.layers_for(t.library_id, t.kind)
+                if layers is not None:
+                    _assess_overlay(change, rows[t.id], arts, t.facts, layers, setup, kinds)
+                else:
+                    _assess(change, rows[t.id], arts, threshold)
                 if change.servers or change.problem:
                     changes.append(change)
 
@@ -323,9 +480,13 @@ async def compute_changes(
 
 async def _artworks(session: AsyncSession, owner_filter: Any) -> dict[int, Any]:
     rows = await session.execute(
-        select(Artwork.id, Artwork.source, Artwork.poster_hash, Artwork.created_at).where(
-            owner_filter
-        )
+        select(
+            Artwork.id,
+            Artwork.source,
+            Artwork.poster_hash,
+            Artwork.poster_edges,
+            Artwork.created_at,
+        ).where(owner_filter)
     )
     return {a.id: a for a in rows}
 
@@ -379,8 +540,23 @@ async def _base_bytes(
     return await client.fetch_poster(row.remote_id, row.poster_ref)
 
 
+def render_workers() -> int:
+    """Render processes: every core but one (at least one)."""
+    return max(1, (os.cpu_count() or 2) - 1)
+
+
+def _clean_old_renders(dest: Path) -> None:
+    owner = dest.name.rsplit("-", 1)[0]
+    for old in dest.parent.glob(f"{owner}-*.jpg"):
+        if old != dest:
+            old.unlink(missing_ok=True)
+
+
 async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
-    """Upload each pending base poster to the servers that don't show it yet."""
+    """Upload each pending poster (the base, or the base with overlays) to the servers that
+    don't show it yet."""
+    from coverarr.services.artwork import save_artwork
+
     sm = ctx.sessionmaker
     config_dir = Path(ctx.params["config_dir"])
     item_ids = ctx.params.get("media_item_ids")
@@ -399,9 +575,16 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
         profile = await load_profile(session)
 
     uploads = sum(len(c.servers) for c in changes)
-    await ctx.log(f"{len(changes)} posters to push ({uploads} uploads)")
+    renders = sum(1 for c in changes if c.render)
+    await ctx.log(
+        f"{len(changes)} posters to push ({uploads} uploads"
+        + (f", {renders} to render with overlays" if renders else "")
+        + ")"
+    )
     counts: dict[str, int] = defaultdict(int)
     done = 0
+    write_lock = asyncio.Lock()
+    loop = asyncio.get_running_loop()
 
     async with AsyncExitStack() as stack:
         clients: dict[int, MediaServerClient] = {}
@@ -410,12 +593,74 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
                 clients[sid] = await stack.enter_async_context(
                     client_for(server, concurrency=profile.poster_concurrency)
                 )
+        pool: ProcessPoolExecutor | None = None
+        if renders:
+            pool = ProcessPoolExecutor(
+                max_workers=render_workers(), mp_context=multiprocessing.get_context("spawn")
+            )
+            stack.callback(pool.shutdown, wait=True, cancel_futures=True)
 
-        async def push(change: Change) -> list[tuple[ServerChange, str | None, str]]:
-            """Returns (server change, new ref, base hash) for each upload that worked."""
-            async with sm() as session:
-                data = await _base_bytes(session, change, clients, config_dir)
-            fingerprint = await asyncio.to_thread(poster_hash, data)
+        async def rendered(change: Change) -> tuple[bytes, str, str]:
+            """(JPEG, fingerprint, pushed_key) of the overlaid poster, rendering it if needed.
+            A server poster used as the base is kept as the title's "original" artwork first,
+            so later renders start from it rather than from an overlaid copy."""
+            assert change.render is not None and pool is not None
+            base = change.render.base
+            if base.startswith("server:"):
+                row_id = int(base.split(":", 2)[1])
+                async with sm() as session:
+                    row = await session.get(ServerItem, row_id)
+                    if row is None or row.server_id not in clients or not row.poster_ref:
+                        raise ValueError("the server poster to draw on is gone")
+                    remote_id, ref, server_id = row.remote_id, row.poster_ref, row.server_id
+                data = await clients[server_id].fetch_poster(remote_id, ref)
+                async with write_lock, sm() as session:
+                    art = await save_artwork(
+                        session,
+                        config_dir,
+                        source="original",
+                        data=data,
+                        name=f"{servers[server_id].name} poster",
+                        media_item_id=change.id,
+                        choose=True,
+                    )
+                    await session.commit()
+                    base, file_path = f"artwork:{art.id}", art.file_path
+                counts["originals_kept"] += 1
+            else:
+                async with sm() as session:
+                    art = await session.get(Artwork, int(base.split(":", 1)[1]))
+                    if art is None:
+                        raise ValueError("the chosen artwork no longer exists")
+                    file_path = art.file_path
+            key = change.render.plan.key(base)
+            dest = rendered_path(config_dir, f"m{change.id}", key)
+            if await asyncio.to_thread(dest.is_file):
+                data = await asyncio.to_thread(dest.read_bytes)
+                fingerprint = await asyncio.to_thread(fingerprints, data)
+            else:
+                fingerprint = await loop.run_in_executor(
+                    pool,
+                    render_to_file,
+                    str(config_dir / file_path),
+                    change.render.plan.size,
+                    plan_args(change.render.plan),
+                    str(dest),
+                )
+                await asyncio.to_thread(_clean_old_renders, dest)
+                data = await asyncio.to_thread(dest.read_bytes)
+                counts["rendered"] += 1
+            return data, fingerprint, f"r:{key}"
+
+        async def push(change: Change) -> list[tuple[ServerChange, str | None, str, str]]:
+            """(server change, new ref, fingerprint, pushed key) for each upload that worked."""
+            if change.render is not None:
+                data, fingerprint, pushed_key = await rendered(change)
+            else:
+                async with sm() as session:
+                    data = await _base_bytes(session, change, clients, config_dir)
+                fingerprint = await asyncio.to_thread(fingerprints, data)
+                pushed_key = f"b:{change.source}"
             content_type = await asyncio.to_thread(_content_type, data)
 
             async def upload(sc: ServerChange):
@@ -423,7 +668,7 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
                     new_ref = await clients[sc.server_id].upload_poster(
                         sc.remote_id, data, content_type
                     )
-                    return sc, new_ref, fingerprint
+                    return sc, new_ref, fingerprint, pushed_key
                 except MediaServerError as exc:
                     counts["failed"] += 1
                     await ctx.log(f"{servers[sc.server_id].name}: {change.title}: {exc}")
@@ -432,23 +677,25 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
             results = await asyncio.gather(*(upload(sc) for sc in change.servers))
             return [r for r in results if r]
 
-        for start in range(0, len(changes), CHUNK):
-            batch = changes[start : start + CHUNK]
+        chunk = max(CHUNK, render_workers() * 4) if renders else CHUNK
+        for start in range(0, len(changes), chunk):
+            batch = changes[start : start + chunk]
             results = await asyncio.gather(*(push(c) for c in batch), return_exceptions=True)
-            async with sm() as session:
+            async with write_lock, sm() as session:
                 for change, result in zip(batch, results, strict=True):
                     if isinstance(result, BaseException):
                         counts["failed"] += len(change.servers)
                         await ctx.log(f"{change.title}: {result}")
                         continue
                     model = ServerItem if change.target == "item" else ServerCollection
-                    for sc, new_ref, fingerprint in result:
+                    for sc, new_ref, fingerprint, pushed_key in result:
                         row = await session.get(model, sc.row_id)
                         if row is None:
                             continue
                         row.poster_ref = new_ref or row.poster_ref
-                        row.pushed_ref = row.poster_ref
-                        row.poster_hash, row.poster_hash_ref = fingerprint, row.poster_ref
+                        row.pushed_ref, row.pushed_key = row.poster_ref, pushed_key
+                        row.poster_hash, row.poster_edges = fingerprint
+                        row.poster_hash_ref = row.poster_ref
                         row.labels = [
                             label for label in row.labels or [] if str(label).lower() != "overlay"
                         ]
@@ -467,6 +714,40 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
     await ctx.progress(1.0, "Push complete")
     await ctx.log(
         f"Uploaded {counts['uploaded']} posters for {counts['pushed']} titles/collections"
+        + (f"; rendered {counts['rendered']} with overlays" if counts["rendered"] else "")
         + (f"; {counts['failed']} failed" if counts["failed"] else "")
     )
     return {"titles": len(changes), **counts}
+
+
+async def plan_item(
+    session: AsyncSession, media_item_id: int, layers: list[dict] | None = None
+) -> Change | None:
+    """The overlay render for one title as things stand (for previews), using ``layers`` or
+    the library's own layers for its level (even if overlays are switched off there)."""
+    t = (await session.execute(select(*ITEM_INFO).where(MediaItem.id == media_item_id))).first()
+    if t is None:
+        return None
+    lib = await session.get(Library, t.library_id)
+    if lib is None or lib.kind not in LEVELS:
+        return None
+    config = await load_config(session)
+    if layers is None:
+        layers = library_config(config, lib.id, lib.kind)["levels"].get(t.kind)
+    if layers is None:
+        return None
+    setup = OverlaySetup(pack_dir(config_dir(), config.get("pack")), {})
+    kinds = dict((await session.execute(select(Server.id, Server.kind))).all())
+    enabled = select(Server.id).where(Server.enabled.is_(True))
+    rows = (
+        await session.execute(
+            select(*ITEM_COLS)
+            .where(ServerItem.media_item_id == t.id, ServerItem.server_id.in_(enabled))
+            .order_by(ServerItem.server_id)
+        )
+    ).all()
+    arts = await _artworks(session, Artwork.media_item_id == t.id)
+    title, top = (await _labels_for(session, [t]))[t.id]
+    change = Change("item", t.id, title, t.kind, t.library_id, t.poster_source or "", top, None)
+    _assess_overlay(change, rows, arts, t.facts, layers, setup, kinds)
+    return change

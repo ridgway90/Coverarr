@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   Film,
   FolderKanban,
+  Layers,
   LayoutDashboard,
   ListChecks,
   Upload,
@@ -75,6 +76,7 @@ export default function Layout({ username }: { username: string }) {
       <div className="mt-3 px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted/70">Manage</div>
       <NavItem to="/review" icon={<ListChecks className="size-4" />} label="Review" badge={openIssues} />
       <NavItem to="/changes" icon={<Upload className="size-4" />} label="Changes" badge={pending} />
+      <NavItem to="/overlays" icon={<Layers className="size-4" />} label="Overlays" />
       <NavItem to="/jobs" icon={<Workflow className="size-4" />} label="Activity" />
       <NavItem to="/settings" icon={<Settings className="size-4" />} label="Settings" />
       <div className="mt-auto space-y-2">

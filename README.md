@@ -4,10 +4,10 @@ One place to manage posters, overlays and collections for **Plex, Jellyfin and E
 all three look the same. It's a Kometa alternative built around doing as little work as
 possible: it tracks what each server already has and only touches what actually changed.
 
-> **Status: Phase 2 (posters).** Coverarr connects to your servers, imports and matches
+> **Status: Phase 3 (overlays).** Coverarr connects to your servers, imports and matches
 > everything, shows where the servers disagree, creates missing collections and fills in
-> missing members, and pushes the base posters you choose to every server. Overlays and *arr
-> webhooks come next; see [docs/ROADMAP.md](docs/ROADMAP.md).
+> missing members, and pushes the base posters you choose, with overlays drawn on, to every
+> server. *arr webhooks come next; see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## What Phase 1 does
 
@@ -38,6 +38,22 @@ possible: it tracks what each server already has and only touches what actually 
   terms forbid automated downloads, so download the set yourself and import the zip.
 - **A–Z bar** on films, TV and collections ("The"/"A"/"An" are skipped, so *The Holiday* is
   under H).
+- **Overlays** (sidebar → Overlays). Upload an overlay pack once (e.g. the jmxd zip; it's
+  unpacked into `/config/assets/overlays`), then switch overlays on per library. The default
+  layers follow a typical Kometa jmxd setup: top and bottom gradients and a resolution badge
+  (4K / 1080p… with DV, HDR, HDR10+) top-left on films, shows, seasons and episodes (episodes use
+  the episode gradients), the network logo bottom-left on shows, and an optional edition banner.
+  Every layer can be switched off, moved or added, with a live preview on any title.
+  - Resolution, HDR, Dolby Vision and edition come from Plex (and its HDR/DV filters), Jellyfin's
+    picture size, and the Radarr/Sonarr file name (`[Bluray-2160p][DV HDR10]`,
+    `{edition-Director's Cut}`). Seasons and shows show their best episode.
+  - The overlaid poster is what *Changes* pushes. Before the first overlaid push, the clean
+    poster is kept as the title's **Original** artwork, so overlays are always drawn on a clean
+    image and never stack (like Kometa's Original Posters).
+  - Coverarr remembers exactly what it pushed. Only titles whose base, media info (e.g. a 4K
+    upgrade) or overlay settings changed are rendered and pushed again. Rendering uses every
+    CPU core but one; rendered posters are cached in `/config/cache/rendered`.
+  - After updating to this version, run an **import** once so media info is collected.
 - **Changes and Push.** Choosing a base poster (a server's poster or a Kometa original) only
   records the choice. The *Changes* page lists every title, season, episode and collection
   whose chosen poster isn't on every server yet, and why (different poster, still has
@@ -101,8 +117,10 @@ All state lives in `/config`, so back up that folder:
                                      poster-set.jpg
     tv/Spaced (1999) {tvdb-75592}/poster-kometa.jpg, season01-kometa.jpg, s01e02-kometa.jpg
     collections/Cornetto Collection/poster-kometa.jpg
-    overlays/                      overlay images (coming with overlays)
+    movies/…/poster-original.jpg   the clean poster overlays are drawn on
+    overlays/jmxd/                 the overlay pack
   cache/                           thumbnails and rendered posters; safe to delete
+    rendered/                      posters with overlays (re-rendered when needed)
 ```
 
 ## Development

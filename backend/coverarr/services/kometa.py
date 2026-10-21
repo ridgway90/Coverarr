@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from coverarr.models import Artwork, Collection, MediaItem, Server, ServerCollection, ServerItem
 from coverarr.services.assets import artwork_path, describe_owners, taken_paths, write_asset
 from coverarr.services.jobs import JobContext
-from coverarr.services.posters import poster_hash
+from coverarr.services.posters import fingerprints
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ class Prepared:
     width: int
     height: int
     hash: str | None
+    edges: str | None = None
 
 
 def prepare(name: str, data: bytes) -> Prepared | None:
@@ -90,10 +91,10 @@ def prepare(name: str, data: bytes) -> Prepared | None:
     except Exception:
         return None
     try:
-        fingerprint = poster_hash(data)
+        fingerprint, edges = fingerprints(data)
     except Exception:
-        fingerprint = None
-    return Prepared(rating_key(name) or "", name, data, suffix, width, height, fingerprint)
+        fingerprint = edges = None
+    return Prepared(rating_key(name) or "", name, data, suffix, width, height, fingerprint, edges)
 
 
 async def _plex_server(session: AsyncSession, server_id: int | None) -> Server:
@@ -177,6 +178,7 @@ async def run_kometa_originals(ctx: JobContext) -> dict[str, Any]:
                 )
                 art.file_path, art.original_name = str(rel), p.name
                 art.width, art.height, art.poster_hash = p.width, p.height, p.hash
+                art.poster_edges = p.edges
                 session.add(art)
                 await session.flush()
                 (imported_items if media_item_id else imported_colls)[

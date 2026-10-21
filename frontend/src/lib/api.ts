@@ -139,7 +139,45 @@ export interface Artwork {
   height: number | null;
 }
 
-export type PosterRef = Presence | Artwork;
+/** A poster Coverarr renders (the base with overlays drawn on). */
+export interface RenderedPoster {
+  url: string;
+  server_id: null;
+  has_poster: boolean;
+  poster_version: string;
+  kometa_overlay: boolean;
+}
+
+export type PosterRef = Presence | Artwork | RenderedPoster;
+
+export type LayerType = "image" | "resolution" | "edition" | "network";
+
+export interface OverlayLayer {
+  type: LayerType;
+  enabled: boolean;
+  file?: string;
+  folder?: string;
+  h_align?: "left" | "center" | "right";
+  v_align?: "top" | "center" | "bottom";
+  h_offset?: number;
+  v_offset?: number;
+  scale?: number;
+}
+
+export interface OverlayLibrary {
+  id: number;
+  name: string;
+  kind: "movie" | "show";
+  enabled: boolean;
+  levels: Record<string, OverlayLayer[]>;
+}
+
+export interface OverlayPack {
+  name: string;
+  images: number;
+  top_files: string[];
+  folders: Record<string, number>;
+}
 
 export interface ItemSummary {
   id: number;
@@ -174,6 +212,10 @@ export interface PendingChange {
   top_id: number | null;
   base: PosterRef | null;
   problem: string | null;
+  /** Pushed with overlays drawn on (``base`` is then the rendered preview). */
+  overlay: boolean;
+  /** Overlay images the pack doesn't have for this title (e.g. an unknown network). */
+  missing_overlays: string[];
   servers: { server_id: number; reason: string; current: PosterRef | null }[];
 }
 
@@ -290,6 +332,7 @@ export type ReviewSummary = Record<IssueType, { open: number; ignored: number }>
 
 export function posterUrl(p: PosterRef | null | undefined, width = 300): string | null {
   if (!p || !p.has_poster) return null;
+  if ("url" in p) return `${p.url}${p.url.includes("?") ? "&" : "?"}w=${width}`;
   if ("artwork_id" in p) {
     return `/api/images/artwork/${p.artwork_id}?w=${width}&v=${encodeURIComponent(p.poster_version)}`;
   }

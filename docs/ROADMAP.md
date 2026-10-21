@@ -28,14 +28,17 @@ Plex, Jellyfin and Emby, doing only the work that a change actually requires.
 
 ## Phase 3: Overlays
 
-- Overlay templates matching the current Kometa setup:
+- [x] Overlay pack upload (e.g. jmxd) into `/config/assets/overlays/<pack>`
+- [x] Default layers matching the Kometa setup:
   - jmxd gradients (top/bottom; episode variants)
-  - resolution + HDR/DV + edition badge, top-left (`resolution/<key><alt>.png`)
+  - resolution + HDR/DV/HDR10+ badge, top-left (`resolution/<key>.png`); edition banner
   - network logo, bottom-left of show posters
-- Applied at **show, season and episode** level for TV; movies get gradients + resolution
-- Live preview editor; rules per library
-- Overlay inputs (resolution, HDR, edition, network) are part of the fingerprint, so a
-  1080p → 4K upgrade re-renders just that item
+- [x] Applied at **show, season and episode** level for TV; movies get gradients + resolution
+- [x] Live preview editor; layers per library and level
+- [x] Overlay inputs (base, resolution, HDR, edition, network, overlay files) make up the
+  render key, so a 1080p → 4K upgrade re-renders just that item
+- [x] Clean originals kept before the first overlaid push, so overlays never stack
+- [x] Rendering on every core but one
 
 ## Phase 4: Automation and custom collections
 

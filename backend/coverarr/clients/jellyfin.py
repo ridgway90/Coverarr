@@ -19,6 +19,7 @@ from coverarr.clients.base import (
     ServerInfo,
     to_int,
 )
+from coverarr.services.mediainfo import resolution_from_size
 
 ITEM_TYPES: dict[str, str] = {
     "movie": "Movie",
@@ -27,7 +28,20 @@ ITEM_TYPES: dict[str, str] = {
     "episode": "Episode",
 }
 LIBRARY_KINDS = {"movies": "movie", "tvshows": "show"}
-FIELDS = "ProviderIds,SortName,ProductionYear,Tags,Overview,Path"
+FIELDS = "ProviderIds,SortName,ProductionYear,Tags,Overview,Path,Studios,Width,Height"
+
+
+def _media_facts(row: dict[str, Any], kind: str) -> dict[str, Any]:
+    facts: dict[str, Any] = {}
+    if kind in ("movie", "episode"):
+        resolution = resolution_from_size(row.get("Width"), row.get("Height"))
+        if resolution:
+            facts["resolution"] = resolution
+    elif kind == "show":
+        studios = [s.get("Name") for s in row.get("Studios") or [] if s.get("Name")]
+        if studios:
+            facts["network"] = studios[0]
+    return facts
 
 
 def provider_ids(item: dict[str, Any]) -> dict[str, str]:
@@ -129,6 +143,7 @@ class JellyfinClient(MediaServerClient):
             poster_ref=(row.get("ImageTags") or {}).get("Primary"),
             labels=[str(t) for t in row.get("Tags") or []],
             path=row.get("Path"),
+            media=_media_facts(row, kind),
         )
         if kind == "season":
             item.show_id = row.get("SeriesId")

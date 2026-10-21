@@ -97,6 +97,7 @@ async def save_artwork(
         width=prepared.width,
         height=prepared.height,
         poster_hash=prepared.hash,
+        poster_edges=prepared.edges,
     )
     session.add(art)
     await session.flush()  # before deleting the old row, so SQLite can't reuse its id

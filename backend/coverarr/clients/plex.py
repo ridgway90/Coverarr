@@ -20,6 +20,7 @@ from coverarr.clients.base import (
     ServerInfo,
     to_int,
 )
+from coverarr.services.mediainfo import normalize_resolution
 
 PLEX_TYPES: dict[str, int] = {"movie": 1, "show": 2, "season": 3, "episode": 4}
 EDIT_TYPES: dict[str, int] = {**PLEX_TYPES, "collection": 18}
@@ -47,6 +48,27 @@ def parse_plex_guids(meta: dict[str, Any]) -> dict[str, str]:
 
 def _tags(meta: dict[str, Any], key: str) -> list[str]:
     return [t["tag"] for t in meta.get(key) or [] if t.get("tag")]
+
+
+def _media_facts(
+    meta: dict[str, Any], kind: str, rating_key: str, flags: dict[str, set[str]]
+) -> dict[str, Any]:
+    facts: dict[str, Any] = {}
+    if kind in ("movie", "episode"):
+        media = (meta.get("Media") or [{}])[0]
+        resolution = normalize_resolution(media.get("videoResolution"))
+        if resolution:
+            facts["resolution"] = resolution
+        for flag, ids in flags.items():
+            if rating_key in ids:
+                facts[flag] = True
+        if meta.get("editionTitle"):
+            facts["edition"] = meta["editionTitle"]
+    elif kind == "show":
+        network = meta.get("network") or meta.get("studio")
+        if network:
+            facts["network"] = network
+    return facts
 
 
 def _media_path(meta: dict[str, Any]) -> str | None:
@@ -145,17 +167,65 @@ class PlexClient(MediaServerClient):
                     ids.update(str(r["ratingKey"]) for r in rows)
         return ids
 
+    async def _count(self, library: RemoteLibrary, kind: ItemKind, **filters: Any) -> int | None:
+        container = await self._container(
+            f"/library/sections/{library.id}/all",
+            {
+                "type": PLEX_TYPES[kind],
+                **filters,
+                "X-Plex-Container-Start": 0,
+                "X-Plex-Container-Size": 0,
+            },
+        )
+        return to_int(container.get("totalSize"))
+
+    async def _filter_ids(self, library: RemoteLibrary, kind: ItemKind, field: str) -> set[str]:
+        """Rating keys matching a boolean filter such as ``hdr`` or ``dovi`` (listings don't
+        say whether a file is HDR or Dolby Vision). Empty if this Plex can't filter by it."""
+        ids: set[str] = set()
+        try:
+            # A Plex that doesn't know the filter ignores it and lists everything, which would
+            # put an HDR badge on every title. Only trust it if =1 and =0 split the library.
+            total = await self._count(library, kind)
+            yes = await self._count(library, kind, **{field: 1})
+            no = await self._count(library, kind, **{field: 0})
+            if total is None or yes is None or no is None or yes + no != total or yes == total:
+                if yes:
+                    log.info("Plex ignores the %s filter on %s; not using it", field, library.name)
+                return ids
+            if not yes:
+                return ids
+            async for rows in self._paged(
+                f"/library/sections/{library.id}/all", {"type": PLEX_TYPES[kind], field: 1}
+            ):
+                ids.update(str(r["ratingKey"]) for r in rows)
+        except MediaServerError as exc:
+            log.info("Plex can't filter %s by %s: %s", library.name, field, exc)
+        return ids
+
     async def items(
         self, library: RemoteLibrary, kind: ItemKind
     ) -> AsyncIterator[list[RemoteItem]]:
         overlay_ids = await self._label_ids(library, kind, "Overlay")
+        flags: dict[str, set[str]] = {}
+        if kind in ("movie", "episode"):
+            flags = {
+                "hdr": await self._filter_ids(library, kind, "hdr"),
+                "dv": await self._filter_ids(library, kind, "dovi"),
+            }
         async for rows in self._paged(
             f"/library/sections/{library.id}/all",
             {"type": PLEX_TYPES[kind], "includeGuids": 1},
         ):
-            yield [self._to_item(r, kind, overlay_ids) for r in rows]
+            yield [self._to_item(r, kind, overlay_ids, flags) for r in rows]
 
-    def _to_item(self, meta: dict[str, Any], kind: ItemKind, overlay_ids: set[str]) -> RemoteItem:
+    def _to_item(
+        self,
+        meta: dict[str, Any],
+        kind: ItemKind,
+        overlay_ids: set[str],
+        flags: dict[str, set[str]] | None = None,
+    ) -> RemoteItem:
         rating_key = str(meta["ratingKey"])
         labels = _tags(meta, "Label")
         if rating_key in overlay_ids and "Overlay" not in labels:
@@ -170,6 +240,7 @@ class PlexClient(MediaServerClient):
             labels=labels,
         )
         item.path = _media_path(meta)
+        item.media = _media_facts(meta, kind, rating_key, flags or {})
         if kind in ("movie", "show"):
             ids = parse_plex_guids(meta)
             item.tmdb_id, item.tvdb_id, item.imdb_id = (

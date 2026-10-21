@@ -149,6 +149,8 @@ class MediaItem(Base):
     episode_number: Mapped[int | None] = mapped_column(Integer)
     # Where the clean base poster comes from: "server:<id>", later also tmdb/upload/kometa.
     poster_source: Mapped[str | None] = mapped_column(String(100))
+    # Resolution / HDR / DV / edition / network merged from every server (services/mediainfo).
+    facts: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
     server_items: Mapped[list[ServerItem]] = relationship(back_populates="media_item")
@@ -191,8 +193,14 @@ class ServerItem(Base):
     # Perceptual hash of the poster and the poster_ref it was computed for.
     poster_hash: Mapped[str | None] = mapped_column(String(32))
     poster_hash_ref: Mapped[str | None] = mapped_column(String(500))
-    # The poster_ref right after Coverarr last uploaded a poster here.
+    # The poster_ref right after Coverarr last uploaded a poster here, and what it uploaded
+    # ("base:<source>" or the render key of an overlaid poster).
     pushed_ref: Mapped[str | None] = mapped_column(String(500))
+    pushed_key: Mapped[str | None] = mapped_column(String(100))
+    # 16x24 greyscale thumbnail (hex) for telling overlays apart (services/posters.py).
+    poster_edges: Mapped[str | None] = mapped_column(String(800))
+    # Resolution / HDR / DV / edition / network as this server reports them (for overlays).
+    media: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     media_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("media_items.id", ondelete="SET NULL")
     )
@@ -246,6 +254,8 @@ class ServerCollection(Base):
     poster_hash: Mapped[str | None] = mapped_column(String(32))
     poster_hash_ref: Mapped[str | None] = mapped_column(String(500))
     pushed_ref: Mapped[str | None] = mapped_column(String(500))
+    pushed_key: Mapped[str | None] = mapped_column(String(100))
+    poster_edges: Mapped[str | None] = mapped_column(String(800))
     member_remote_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     collection_id: Mapped[int | None] = mapped_column(
         ForeignKey("collections.id", ondelete="SET NULL")
@@ -323,6 +333,7 @@ class Artwork(Base):
     width: Mapped[int | None] = mapped_column(Integer)
     height: Mapped[int | None] = mapped_column(Integer)
     poster_hash: Mapped[str | None] = mapped_column(String(32))
+    poster_edges: Mapped[str | None] = mapped_column(String(800))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 

@@ -20,6 +20,7 @@ from coverarr.models import (
 from coverarr.services.importer import apply_remote_item, upsert_items
 from coverarr.services.jobs import JobContext
 from coverarr.services.matching import match_all
+from coverarr.services.mediainfo import refresh_facts
 from coverarr.services.posters import _hash_one
 from coverarr.services.review import refresh_issues
 
@@ -35,6 +36,7 @@ LABELS = {
 
 async def _finish(session: AsyncSession, library_id: int | None) -> dict[str, int]:
     await match_all(session, [library_id] if library_id is not None else [])
+    await refresh_facts(session, [library_id] if library_id is not None else [])
     issues = await refresh_issues(session)
     await session.commit()
     return issues
@@ -92,7 +94,8 @@ async def run_refresh_item(ctx: JobContext) -> dict[str, Any]:
             before = {f: getattr(row, f) for f in (*ID_FIELDS, "title", "poster_ref")}
             apply_remote_item(row, remote)
             if new_hash is not None:
-                row.poster_hash, row.poster_hash_ref = new_hash, remote.poster_ref
+                row.poster_hash, row.poster_edges = new_hash
+                row.poster_hash_ref = remote.poster_ref
             changed = [LABELS[f] for f, v in before.items() if getattr(row, f) != v]
             if row.kind == "show":
                 await upsert_items(
@@ -164,7 +167,8 @@ async def run_refresh_collection(ctx: JobContext) -> dict[str, Any]:
             row.smart, row.poster_ref, row.labels = remote.smart, remote.poster_ref, remote.labels
             row.member_remote_ids = remote.member_ids
             if new_hash is not None:
-                row.poster_hash, row.poster_hash_ref = new_hash, remote.poster_ref
+                row.poster_hash, row.poster_edges = new_hash
+                row.poster_hash_ref = remote.poster_ref
             count = len(remote.member_ids)
             changes.append(
                 f"{server.name}: {count} items"

@@ -198,11 +198,15 @@ export default function ChangesPage() {
                   <div className="mt-0.5 text-xs text-muted">
                     {KIND[change.kind]}
                     {change.library ? ` · ${change.library}` : ""}
+                    {change.overlay ? " · with overlays" : ""}
                     {change.source.startsWith("artwork:") ? " · from your artwork" : ""}
                     {change.source.startsWith("server:")
                       ? ` · from ${servers.get(Number(change.source.split(":")[1]))?.name ?? "a server"}`
                       : ""}
                   </div>
+                  {change.missing_overlays?.length > 0 && (
+                    <div className="mt-1 text-xs text-warn">Not in the overlay pack: {change.missing_overlays.join(", ")}</div>
+                  )}
                   {change.problem ? (
                     <div className="mt-1 text-xs text-danger">{change.problem}</div>
                   ) : (
