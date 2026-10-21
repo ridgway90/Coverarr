@@ -320,33 +320,88 @@ class SetMatcher:
         return [], colls if f.year is None else []
 
 
+SEASON_ONLY = re.compile(r"^(?:(?:season|series)\s*(?P<n>\d+)|(?P<specials>specials))$", re.I)
+
+
+@dataclass
+class SetScope:
+    """A poster set uploaded on one title's or collection's page: only it (with its seasons,
+    or a collection's films) is matched."""
+
+    item_ids: list[int]
+    collection_ids: list[int]
+    show_id: int | None = None
+
+    def season_for(self, f: SetFile, seasons: list[Any]) -> list[int]:
+        """Files named just "Season 1" / "Specials" belong to the show the set is for."""
+        m = SEASON_ONLY.match(f.title)
+        if self.show_id is None or not m:
+            return []
+        number = 0 if m.group("specials") else int(m.group("n"))
+        return [s.id for s in seasons if s.parent_id == self.show_id and s.season_number == number]
+
+    def fallback(self) -> tuple[list[int], list[int]]:
+        if self.collection_ids:
+            return [], self.collection_ids[:1]
+        return self.item_ids[:1], []
+
+
+async def _set_scope(session: AsyncSession, params: dict[str, Any]) -> SetScope | None:
+    if params.get("media_item_id"):
+        item = await session.get(MediaItem, params["media_item_id"])
+        if item is None or item.kind not in ("movie", "show"):
+            raise ArtworkError("That title no longer exists")
+        return SetScope([item.id], [], item.id if item.kind == "show" else None)
+    if params.get("collection_id"):
+        from coverarr.models import ServerCollection, ServerItem
+
+        coll = await session.get(Collection, params["collection_id"])
+        if coll is None:
+            raise ArtworkError("That collection no longer exists")
+        members: set[int] = set()
+        for sc in await session.scalars(
+            select(ServerCollection).where(ServerCollection.collection_id == coll.id)
+        ):
+            members.update(
+                await session.scalars(
+                    select(ServerItem.media_item_id).where(
+                        ServerItem.server_id == sc.server_id,
+                        ServerItem.remote_id.in_(sc.member_remote_ids or []),
+                        ServerItem.media_item_id.is_not(None),
+                    )
+                )
+            )
+        return SetScope(sorted(members), [coll.id])
+    return None
+
+
 async def run_poster_set(ctx: JobContext) -> dict[str, Any]:
     """Import a folder or zip of posters named by title (e.g. a ThePosterDB set)."""
     config_dir = Path(ctx.params["config_dir"])
     source_path = Path(ctx.params["source"])
     keep_choices = bool(ctx.params.get("keep_choices"))
     async with ctx.sessionmaker() as session:
-        items = (
-            await session.execute(
-                select(
-                    MediaItem.id,
-                    MediaItem.kind,
-                    MediaItem.title,
-                    MediaItem.year,
-                    MediaItem.tmdb_id,
-                    MediaItem.tvdb_id,
-                    MediaItem.imdb_id,
-                ).where(MediaItem.kind.in_(("movie", "show")))
-            )
-        ).all()
-        seasons = (
-            await session.execute(
-                select(MediaItem.id, MediaItem.parent_id, MediaItem.season_number).where(
-                    MediaItem.kind == "season"
-                )
-            )
-        ).all()
-        colls = (await session.execute(select(Collection.id, Collection.normalized_name))).all()
+        scope = await _set_scope(session, ctx.params)
+        item_query = select(
+            MediaItem.id,
+            MediaItem.kind,
+            MediaItem.title,
+            MediaItem.year,
+            MediaItem.tmdb_id,
+            MediaItem.tvdb_id,
+            MediaItem.imdb_id,
+        ).where(MediaItem.kind.in_(("movie", "show")))
+        season_query = select(MediaItem.id, MediaItem.parent_id, MediaItem.season_number).where(
+            MediaItem.kind == "season"
+        )
+        coll_query = select(Collection.id, Collection.normalized_name)
+        if scope is not None:
+            item_query = item_query.where(MediaItem.id.in_(scope.item_ids))
+            season_query = season_query.where(MediaItem.parent_id.in_(scope.item_ids))
+            coll_query = coll_query.where(Collection.id.in_(scope.collection_ids))
+        items = (await session.execute(item_query)).all()
+        seasons = (await session.execute(season_query)).all()
+        colls = (await session.execute(coll_query)).all()
     matcher = SetMatcher(items, seasons, colls)
 
     counts: dict[str, int] = defaultdict(int)
@@ -357,19 +412,37 @@ async def run_poster_set(ctx: JobContext) -> dict[str, Any]:
         entries = await asyncio.to_thread(source.entries)
         async with ctx.sessionmaker() as session:
             taken = await taken_paths(session)
-            # Match a batch of files, decode and fingerprint them on every core, then save.
-            for start in range(0, len(entries), 32):
+            # Work out what each file belongs to first (cheap), then read in batches.
+            planned: list[tuple[SetFile, list[int], list[int], Any]] = []
+            leftovers: list[tuple[SetFile, Any]] = []
+            for name, reader in entries:
+                parsed = parse_set_name(name)
+                if parsed is None:
+                    counts["skipped"] += 1
+                    continue
+                item_ids, coll_ids = matcher.match(parsed)
+                if not item_ids and not coll_ids and scope is not None:
+                    item_ids = scope.season_for(parsed, seasons)
+                if item_ids or coll_ids:
+                    planned.append((parsed, item_ids, coll_ids, reader))
+                else:
+                    leftovers.append((parsed, reader))
+            # Uploaded on one title's page: a single file whose name doesn't point anywhere
+            # else ("poster.jpg", "Cornetto Trilogy.png") is that title's poster.
+            loose = [
+                (f, r) for f, r in leftovers if f.year is None and f.season is None and not f.ids
+            ]
+            if scope is not None and len(loose) == 1:
+                leftovers.remove(loose[0])
+                planned.append((loose[0][0], *scope.fallback(), loose[0][1]))
+            for parsed, _ in leftovers:
+                counts["unmatched"] += 1
+                unmatched.append(parsed.name)
+
+            # Decode and fingerprint each batch on every core, then save.
+            for start in range(0, len(planned), 32):
                 batch: list[tuple[SetFile, list[int], list[int], bytes]] = []
-                for name, reader in entries[start : start + 32]:
-                    parsed = parse_set_name(name)
-                    if parsed is None:
-                        counts["skipped"] += 1
-                        continue
-                    item_ids, coll_ids = matcher.match(parsed)
-                    if not item_ids and not coll_ids:
-                        counts["unmatched"] += 1
-                        unmatched.append(parsed.name)
-                        continue
+                for parsed, item_ids, coll_ids, reader in planned[start : start + 32]:
                     batch.append((parsed, item_ids, coll_ids, await asyncio.to_thread(reader)))
                 prepared = await asyncio.gather(
                     *(prepare_async(parsed.name, data) for parsed, _, _, data in batch)
@@ -408,9 +481,9 @@ async def run_poster_set(ctx: JobContext) -> dict[str, Any]:
                     else:
                         matched.append(parsed.name)
                 await session.commit()
-                done = min(start + 32, len(entries))
+                done = min(start + 32, len(planned))
                 await ctx.progress(
-                    0.95 * done / max(len(entries), 1), f"Read {done}/{len(entries)}"
+                    0.95 * done / max(len(planned), 1), f"Read {done}/{len(planned)}"
                 )
             from coverarr.services.review import refresh_issues
 

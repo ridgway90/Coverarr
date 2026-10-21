@@ -131,8 +131,12 @@ async def upload_poster_set(
     request: Request,
     file: Annotated[UploadFile, File()],
     keep_choices: Annotated[bool, Form()] = False,
+    media_item_id: Annotated[int | None, Form()] = None,
+    collection_id: Annotated[int | None, Form()] = None,
 ):
-    """A zip of posters named by title, e.g. a set downloaded from ThePosterDB."""
+    """A zip of posters named by title, e.g. a set downloaded from ThePosterDB. With
+    ``media_item_id`` or ``collection_id`` only that title (and its seasons) or that
+    collection (and its films) is matched."""
     if not (file.filename or "").lower().endswith(".zip"):
         raise HTTPException(422, "Upload the poster set as a .zip")
     dest = _config_dir(request) / "imports" / f"poster-set-{uuid.uuid4().hex}.zip"
@@ -144,6 +148,8 @@ async def upload_poster_set(
             "config_dir": str(_config_dir(request)),
             "keep_choices": keep_choices,
             "remove_after": True,
+            **({"media_item_id": media_item_id} if media_item_id else {}),
+            **({"collection_id": collection_id} if collection_id else {}),
         },
     )
     return {"job_id": job.id}

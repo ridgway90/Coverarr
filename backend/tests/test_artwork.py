@@ -389,3 +389,76 @@ async def test_reset_from_tmdb(app, authed, fake_servers):
         "/api/posters/reset-from-tmdb", json={"kinds": [], "collections": False}
     )
     assert bad.status_code == 422
+
+
+async def _set_job(app, client, archive: bytes, **scope) -> dict:
+    resp = await client.post(
+        "/api/poster-sets/upload",
+        files={"file": ("set.zip", archive, "application/zip")},
+        data={k: str(v) for k, v in scope.items()},
+    )
+    assert resp.status_code == 200, resp.text
+    await app.state.jobs.wait_idle()
+    job = (await client.get(f"/api/jobs/{resp.json()['job_id']}")).json()
+    assert job["status"] == "succeeded", job
+    return job["result"]
+
+
+async def test_poster_set_for_one_title_or_collection(app, authed, fake_servers):
+    client = authed
+    await add_servers(client)
+    await run_job(app, client, "import")
+    films, tv = await _libs(client)
+
+    # A show's page: loosely named season files count, other titles don't.
+    spaced = await _item(client, tv["id"], "Spaced")
+    r = await _set_job(
+        app,
+        client,
+        _zip(
+            {
+                "Spaced (1999).png": poster_png("set spaced"),
+                "Season 1.png": poster_png("set spaced 1"),
+                "Series 2.png": poster_png("set spaced 2"),
+                "Hot Fuzz (2007).png": poster_png("set fuzz"),
+            }
+        ),
+        media_item_id=spaced["id"],
+    )
+    assert r["imported"] == 3
+    assert r["unmatched_files"] == ["Hot Fuzz (2007).png"]
+    detail = (await client.get(f"/api/items/{spaced['id']}")).json()
+    assert detail["poster_source"].startswith("artwork:")
+    assert all(
+        s["poster_source"] and s["poster_source"].startswith("artwork:") for s in detail["seasons"]
+    )
+
+    # A collection's page: its films, and a lone file with another name is the collection's.
+    colls = (await client.get("/api/collections", params={"library_id": films["id"]})).json()
+    cornetto = next(c for c in colls if c["name"] == "Cornetto Collection")
+    r = await _set_job(
+        app,
+        client,
+        _zip(
+            {
+                "Cornetto Trilogy.png": poster_png("set trilogy"),
+                "Shaun of the Dead (2004).png": poster_png("set shaun"),
+                "Elf (2003).png": poster_png("set elf"),  # not in this collection
+            }
+        ),
+        collection_id=cornetto["id"],
+    )
+    assert r["imported"] == 2 and r["unmatched_files"] == ["Elf (2003).png"]
+    detail = (await client.get(f"/api/collections/{cornetto['id']}")).json()
+    assert detail["poster_source"].startswith("artwork:")
+    elf = await _item(client, films["id"], "Elf")
+    assert not (await client.get(f"/api/items/{elf['id']}")).json()["poster_source"]
+
+    # A film's page: one file, whatever it's called.
+    r = await _set_job(
+        app, client, _zip({"poster.png": poster_png("set elf")}), media_item_id=elf["id"]
+    )
+    assert r["imported"] == 1
+    assert (
+        (await client.get(f"/api/items/{elf['id']}")).json()["poster_source"].startswith("artwork:")
+    )

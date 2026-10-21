@@ -136,7 +136,7 @@ export default function CollectionDetailPage() {
             posterSource={coll.poster_source}
             onChoose={(id) => choose.mutate(id)}
             busy={choose.isPending}
-            owner={{ kind: "collections", id: coll.id }}
+            owner={{ kind: "collections", id: coll.id, sets: true }}
           />
         </Card>
         <div className="space-y-6">
