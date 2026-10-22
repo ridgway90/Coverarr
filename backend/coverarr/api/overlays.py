@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
+import shutil
 import uuid
 import zipfile
 from pathlib import Path
@@ -116,32 +118,72 @@ async def reset_library(library_id: int, session: AsyncSession = Depends(get_ses
     return default_library(lib.kind)
 
 
+def _merge_into(incoming: Path, root: Path) -> list[str]:
+    """Move every file of an unpacked zip into the current pack (same relative paths)."""
+    moved = []
+    for rel in overlay_slots.pack_images(incoming):
+        dest = root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(incoming / rel, dest)
+        moved.append(rel)
+    shutil.rmtree(incoming, ignore_errors=True)
+    return moved
+
+
 @router.post("/pack")
 async def upload_pack(
     request: Request,
     file: Annotated[UploadFile, File()],
+    replace: Annotated[bool, Form()] = False,
     session: AsyncSession = Depends(get_session),
 ):
-    """Install an overlay pack (e.g. the jmxd zip) into /config/assets/overlays."""
+    """Add a zip of overlay images (e.g. the jmxd pack) to the overlay images: each one is
+    sorted into its slot, renamed and converted as the renderer expects. With ``replace``, or
+    when there's no pack yet, the zip becomes the whole pack."""
     filename = file.filename or ""
     if not filename.lower().endswith(".zip"):
         raise HTTPException(422, "Upload the overlay pack as a .zip")
-    dest = _config_dir(request) / "imports" / f"overlay-pack-{uuid.uuid4().hex}.zip"
+    config_dir = _config_dir(request)
+    dest = config_dir / "imports" / f"overlay-pack-{uuid.uuid4().hex}.zip"
     await asyncio.to_thread(_save_upload, file, dest)
-    name = Path(filename).stem or "pack"
+    config, root, slots = await _slot_context(request, session)
+    adding = not replace and root is not None and await asyncio.to_thread(root.is_dir)
+    name = f"incoming-{uuid.uuid4().hex[:12]}" if adding else (Path(filename).stem or "pack")
     try:
-        info = await asyncio.to_thread(install_pack, _config_dir(request), dest, name)
+        info = await asyncio.to_thread(install_pack, config_dir, dest, name)
     except zipfile.BadZipFile as exc:
         raise HTTPException(422, "That file isn't a valid zip") from exc
     except (OverlayError, OSError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
     finally:
         await asyncio.to_thread(dest.unlink, missing_ok=True)
-    config = await load_config(session)
-    config["pack"] = info["name"]
-    await save_config(session, config)
-    await session.commit()
-    return info
+    if adding:
+        assert root is not None
+        files = await asyncio.to_thread(_merge_into, pack_dir(config_dir, info["name"]), root)
+    else:
+        config["pack"] = info["name"]
+        await save_config(session, config)
+        await session.commit()
+        root, files = pack_dir(config_dir, info["name"]), None
+    assert root is not None
+    report = await asyncio.to_thread(
+        overlay_slots.sort_images, root, slots, overlay_slots.gradient_files(config), files
+    )
+    return {
+        **(await asyncio.to_thread(describe_pack, config_dir, config["pack"]) or {}),
+        "sorted": report,
+    }
+
+
+@router.post("/pack/sort")
+async def sort_pack(request: Request, session: AsyncSession = Depends(get_session)):
+    """Sort every image already in the pack into its slot (as an upload does)."""
+    config, root, slots = await _slot_context(request, session)
+    if root is None or not await asyncio.to_thread(root.is_dir):
+        raise HTTPException(404, "There's no overlay pack yet")
+    return await asyncio.to_thread(
+        overlay_slots.sort_images, root, slots, overlay_slots.gradient_files(config)
+    )
 
 
 @router.get("/samples")
@@ -360,6 +402,27 @@ async def delete_slot(
     return {"ok": True}
 
 
+class AssignRequest(BaseModel):
+    source: str  # an image in the pack
+    path: str  # the slot
+
+
+@router.post("/slots/assign")
+async def assign_slot(
+    body: AssignRequest, request: Request, session: AsyncSession = Depends(get_session)
+):
+    """Move an image that's already in the pack into a slot."""
+    _, root, slots = await _slot_context(request, session)
+    slot = next((s for s in slots if s.path == body.path), None)
+    if slot is None or root is None:
+        raise HTTPException(422, "Unknown overlay slot")
+    try:
+        saved = await asyncio.to_thread(overlay_slots.assign, root, slot, body.source)
+    except OverlayError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"path": saved}
+
+
 class GuessRequest(BaseModel):
     names: list[str]
 
@@ -371,6 +434,23 @@ async def guess_slots(
     """Which slot each file name is probably for (None when it can't tell)."""
     _, _, slots = await _slot_context(request, session)
     return [{"name": n, "path": overlay_slots.guess(n, slots)} for n in body.names[:200]]
+
+
+@router.delete("/pack/file")
+async def delete_pack_file(
+    request: Request, path: str = Query(...), session: AsyncSession = Depends(get_session)
+):
+    """Remove one image from the pack (e.g. a leftover the sort couldn't place)."""
+    config = await load_config(session)
+    root = pack_dir(_config_dir(request), config.get("pack"))
+    try:
+        rel = _safe_rel(path)
+    except OverlayError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if root is None:
+        raise HTTPException(404, "Not in the overlay pack")
+    await asyncio.to_thread(overlay_slots.remove, root, rel)
+    return {"ok": True}
 
 
 @router.get("/pack/file")
