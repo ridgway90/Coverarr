@@ -1,5 +1,7 @@
 """Collections built from lists: defined in Coverarr, synced to every server."""
 
+import json
+
 import httpx
 import respx
 
@@ -363,3 +365,109 @@ def test_kometa_labels_are_read():
     )
     assert parsed[0].options == {"label": "kids, family", "item_label": ["Kids Film"]}
     assert "item_label" not in parsed[0].unsupported
+
+
+def _imdb_page(titles: list[tuple[str, str, int]], *, next_data: bool = True) -> str:
+    """An IMDb chart/list page: embedded data when ``next_data``, else only title links."""
+    links = "".join(
+        f'<a href="/title/{tid}/?ref_=chttp_t_{i}">{t}</a>' for i, (tid, t, _) in enumerate(titles)
+    )
+    if not next_data:
+        return f"<html><body><a href='/title/tt9999999/'>Ad</a>{links}</body></html>"
+    edges = [
+        {
+            "currentRank": i + 1,
+            "node": {
+                "id": tid,
+                "titleText": {"text": t},
+                "releaseYear": {"year": y},
+                "titleType": {"id": "movie"},
+            },
+        }
+        for i, (tid, t, y) in enumerate(titles)
+    ]
+    data = {
+        "props": {
+            "pageProps": {
+                "pageData": {"chartTitles": {"edges": edges}},
+                "nav": [{"id": "tt0000001", "titleText": {"text": "Promo"}}],
+            }
+        }
+    }
+    return (
+        "<html><body>"
+        f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script>'
+        f"{links}</body></html>"
+    )
+
+
+def test_imdb_pages_are_read():
+    from coverarr.services.lists import imdb_titles, normalize_builder
+
+    page = _imdb_page([("tt0425112", "Hot Fuzz", 2007), ("tt0365748", "Shaun of the Dead", 2004)])
+    entries = imdb_titles(page, "movie")
+    assert [(e.imdb_id, e.title, e.year) for e in entries] == [
+        ("tt0425112", "Hot Fuzz", 2007),
+        ("tt0365748", "Shaun of the Dead", 2004),
+    ]
+    # Without the embedded data the title links still give the ids, in order.
+    bare = imdb_titles(_imdb_page([("tt0425112", "Hot Fuzz", 2007)], next_data=False), "movie")
+    assert [e.imdb_id for e in bare] == ["tt9999999", "tt0425112"]
+    assert normalize_builder("imdb_chart", "Top_Movies") == {
+        "type": "imdb_chart",
+        "value": "top_movies",
+    }
+    assert normalize_builder("imdb_list", "https://www.imdb.com/list/ls055592025/?sort=x") == {
+        "type": "imdb_list",
+        "value": "ls055592025",
+    }
+    assert (
+        normalize_builder("imdb_id", "https://www.imdb.com/title/tt0425112/")["value"]
+        == "tt0425112"
+    )
+
+
+async def test_imdb_chart_and_list_collections(app, authed, fake_servers):
+    client = authed
+    await add_servers(client)
+    await run_job(app, client, "import")
+    films = await _films(client)
+    resp = await client.post(
+        "/api/definitions",
+        json={
+            "name": "IMDb Picks",
+            "library_id": films,
+            "builders": [
+                {"type": "imdb_chart", "value": "top_movies"},
+                {"type": "imdb_list", "value": "https://www.imdb.com/list/ls000000001/"},
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    definition = resp.json()
+    assert definition["sync_mode"] == "append"  # a list as well as a chart
+    chart = _imdb_page([("tt0099785", "Home Alone", 1990), ("tt1234567", "Not Yours", 2020)])
+    listing = _imdb_page([("tt0319343", "Elf", 2003)])
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://www.imdb.com/chart/top/").respond(text=chart)
+        mock.get(url__regex=r"https://www\.imdb\.com/list/ls000000001/\?page=1$").respond(
+            text=listing
+        )
+        mock.get(url__regex=r"https://www\.imdb\.com/list/ls000000001/\?page=\d+$").respond(
+            text=listing
+        )
+        synced = await _sync(app, client, definition["id"])
+    result = synced["sync_result"]
+    assert result["errors"] == [], result
+    assert result["in_library"] == 2 and result["missing"] == [{"title": "Not Yours", "year": 2020}]
+    for srv in fake_servers.values():
+        assert sorted(_titles(srv, _coll(srv, "IMDb Picks"))) == ["Elf", "Home Alone"]
+
+    # IMDb holding the page back is an error on the list, and nothing is removed.
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://www.imdb.com/chart/top/").respond(202, text="")
+        mock.get(url__regex=r"https://www\.imdb\.com/list/.*").respond(text=listing)
+        synced = await _sync(app, client, definition["id"])
+    assert any("IMDb didn't send the page" in e for e in synced["sync_result"]["errors"])
+    for srv in fake_servers.values():
+        assert sorted(_titles(srv, _coll(srv, "IMDb Picks"))) == ["Elf", "Home Alone"]

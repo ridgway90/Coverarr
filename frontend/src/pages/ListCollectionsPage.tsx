@@ -327,7 +327,11 @@ function DefinitionForm({ definition, onClose }: { definition: Definition | null
                   <select
                     className={selectClass + " w-56 shrink-0"}
                     value={b.type}
-                    onChange={(e) => setBuilder(i, { type: e.target.value, value: SOURCE_BY_TYPE.get(e.target.value)?.chart ? "20" : "" })}
+                    onChange={(e) => {
+                      const next = SOURCE_BY_TYPE.get(e.target.value);
+                      const first = next?.choices?.find((c) => !kind || c.kinds.includes(kind))?.value;
+                      setBuilder(i, { type: e.target.value, value: next?.chart ? "20" : first ?? "" });
+                    }}
                   >
                     {!types.some((t) => t.type === b.type) && <option value={b.type}>{source?.label ?? b.type}</option>}
                     {types.map((t) => (
@@ -336,15 +340,27 @@ function DefinitionForm({ definition, onClose }: { definition: Definition | null
                       </option>
                     ))}
                   </select>
-                  <input
-                    className={inputClass}
-                    type={source?.chart ? "number" : "text"}
-                    min={1}
-                    max={500}
-                    placeholder={source?.hint}
-                    value={b.value}
-                    onChange={(e) => setBuilder(i, { value: e.target.value })}
-                  />
+                  {source?.choices ? (
+                    <select className={selectClass + " w-full"} value={b.value} onChange={(e) => setBuilder(i, { value: e.target.value })}>
+                      {source.choices
+                        .filter((c) => !kind || c.kinds.includes(kind))
+                        .map((c) => (
+                          <option key={c.value} value={c.value}>
+                            {c.label}
+                          </option>
+                        ))}
+                    </select>
+                  ) : (
+                    <input
+                      className={inputClass}
+                      type={source?.chart ? "number" : "text"}
+                      min={1}
+                      max={500}
+                      placeholder={source?.hint}
+                      value={b.value}
+                      onChange={(e) => setBuilder(i, { value: e.target.value })}
+                    />
+                  )}
                   <Button variant="ghost" icon={<X className="size-4" />} aria-label="Remove this list" disabled={builders.length === 1} onClick={() => setBuilders(builders.filter((_, j) => j !== i))} />
                 </div>
               );
