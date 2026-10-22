@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import io
 import itertools
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -111,6 +112,7 @@ class Item:
     index: int | None = None
     parent_index: int | None = None
     labels: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)  # Jellyfin/Emby tags set through the API
     art_seed: str | None = None
     art_version: int = 1
     overlay: bool = False
@@ -141,6 +143,7 @@ class Coll:
     sort_title: str | None = None
     summary: str | None = None
     order: str | None = None  # Plex collectionSort, or Jellyfin DisplayOrder
+    labels: list[str] = field(default_factory=list)
 
 
 class FakeServer:
@@ -422,6 +425,8 @@ def plex_router(srv: FakeServer) -> APIRouter:
         }
         if item.kind in ("movie", "show"):
             out["art"] = f"/library/metadata/{item.id}/art/{1700000000 + item.bg_version}"
+        if item.labels:
+            out["Label"] = [{"tag": t} for t in item.labels]  # listings carry labels too
         if item.year:
             out["year"] = item.year
         if item.kind in ("movie", "show"):
@@ -637,12 +642,16 @@ def plex_router(srv: FakeServer) -> APIRouter:
     async def edit(lib: str, request: Request):
         auth(request)
         qp = request.query_params
-        if "label[].tag.tag-" in qp:
-            item = srv.items.get(qp["id"]) or _missing()
-            kinds = {"1": "movie", "2": "show", "3": "season", "4": "episode"}
-            if kinds.get(qp.get("type", "")) != item.kind or item.library != lib:
+        adds = [v for k, v in qp.multi_items() if re.fullmatch(r"label\[\d+\]\.tag\.tag", k)]
+        if "label[].tag.tag-" in qp or adds:
+            kinds = {"1": "movie", "2": "show", "3": "season", "4": "episode", "18": "collection"}
+            target = srv.collections.get(qp["id"]) or srv.items.get(qp["id"]) or _missing()
+            kind = "collection" if isinstance(target, Coll) else target.kind
+            if kinds.get(qp.get("type", "")) != kind or target.library != lib:
                 raise HTTPException(400)
-            item.labels = [t for t in item.labels if t != qp["label[].tag.tag-"]]
+            gone = set(qp.get("label[].tag.tag-", "").split(","))
+            target.labels = [t for t in target.labels if t not in gone]
+            target.labels += [t for t in adds if t not in target.labels]
             return {}
         coll = srv.collections.get(qp["id"]) or _missing()
         if qp.get("type") != "18" or coll.library != lib:
@@ -747,6 +756,8 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
             "SortName": item.title.lower(),
             "ImageTags": {"Primary": tag(item.art_version, item.id)},
         }
+        if item.tags:
+            out["Tags"] = list(item.tags)
         if item.kind in ("movie", "show"):
             out["BackdropImageTags"] = [tag(f"bg{item.bg_version}", item.id)]
         if item.year:
@@ -779,6 +790,7 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
             "SortName": c.sort_title or c.name.lower(),
             "Overview": c.summary,
             "DisplayOrder": c.order,
+            "Tags": list(c.labels),
             "ImageTags": {"Primary": tag(c.art_version, c.id)},
         }
 
@@ -885,13 +897,17 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
     async def update_item(item_id: str, request: Request):
         auth(request)
         body = await request.json()
-        coll = srv.collections.get(item_id) or _missing()
         if body.get("Id") != item_id:
             raise HTTPException(400)  # the real API wants the whole item back
         lockable = {"Cast", "Genres", "ProductionLocations", "Studios", "Tags", "Name"}
         lockable |= {"Overview", "Runtime", "OfficialRating"}
         if set(body.get("LockedFields") or []) - lockable:
             raise HTTPException(400, "LockedFields: not a MetadataField")
+        if item_id in srv.items:
+            srv.items[item_id].tags = list(body.get("Tags") or [])
+            return Response(status_code=204)
+        coll = srv.collections.get(item_id) or _missing()
+        coll.labels = list(body.get("Tags") or [])
         coll.name = body["Name"]
         coll.summary = body.get("Overview")
         coll.order = body.get("DisplayOrder")

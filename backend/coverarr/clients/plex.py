@@ -366,6 +366,33 @@ class PlexClient(MediaServerClient):
         resp = await self._request("GET", path, headers={"Accept": "image/*"})
         return resp.content
 
+    async def edit_labels(
+        self,
+        library_remote_id: str | None,
+        item_id: str,
+        kind: str,
+        add: list[str],
+        remove: list[str],
+    ) -> None:
+        if not add and not remove:
+            return
+        if not library_remote_id:
+            raise MediaServerError("plex: no library section to edit labels in")
+        base = {"type": EDIT_TYPES[kind], "id": item_id}
+        if add:
+            params = {f"label[{i}].tag.tag": label for i, label in enumerate(add)}
+            await self._request(
+                "PUT",
+                f"/library/sections/{library_remote_id}/all",
+                params={**base, **params, "label.locked": 1},
+            )
+        if remove:
+            await self._request(
+                "PUT",
+                f"/library/sections/{library_remote_id}/all",
+                params={**base, "label[].tag.tag-": ",".join(remove), "label.locked": 1},
+            )
+
     async def fetch_background(
         self, item_id: str, background_ref: str, max_width: int | None = None
     ) -> bytes:

@@ -122,6 +122,8 @@ function DefinitionRow({
     ORDER_LABELS[d.options.collection_order ?? "release"],
     d.sync_mode === "sync" ? "exact" : "add only",
     d.options.sort_title && `sort title "${d.options.sort_title}"`,
+    labelText(d.options.label) && `labels: ${labelText(d.options.label)}`,
+    labelText(d.options.item_label) && `labels on its titles: ${labelText(d.options.item_label)}`,
   ].filter(Boolean);
 
   return (
@@ -257,6 +259,8 @@ function DefinitionForm({ definition, onClose }: { definition: Definition | null
   const [order, setOrder] = useState(definition?.options.collection_order ?? "release");
   const [sortTitle, setSortTitle] = useState(definition?.options.sort_title ?? "");
   const [summary, setSummary] = useState(definition?.options.summary ?? "");
+  const [labels, setLabels] = useState(labelText(definition?.options.label));
+  const [itemLabels, setItemLabels] = useState(labelText(definition?.options.item_label));
   const [enabled, setEnabled] = useState(definition?.enabled ?? true);
   const kind = libraries.find((l) => l.id === libraryId)?.kind ?? "movie";
   const types = SOURCE_TYPES.filter((s) => s.kinds.includes(kind));
@@ -268,7 +272,7 @@ function DefinitionForm({ definition, onClose }: { definition: Definition | null
         name,
         library_id: libraryId === "" ? null : libraryId,
         builders: builders.filter((b) => String(b.value).trim()),
-        options: { sync_mode: mode, collection_order: order, sort_title: sortTitle, summary },
+        options: { sync_mode: mode, collection_order: order, sort_title: sortTitle, summary, label: labels, item_label: itemLabels },
         enabled,
       };
       return definition ? api.put(`/api/definitions/${definition.id}`, body) : api.post("/api/definitions", body);
@@ -393,8 +397,23 @@ function DefinitionForm({ definition, onClose }: { definition: Definition | null
         <Field label="Summary">
           <textarea className={inputClass + " h-20 py-2"} value={summary} onChange={(e) => setSummary(e.target.value)} />
         </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Labels" hint="On the collection (tags on Jellyfin/Emby), comma-separated, e.g. for Plex sharing restrictions.">
+            <input className={inputClass} value={labels} onChange={(e) => setLabels(e.target.value)} placeholder="Kids, Family" />
+          </Field>
+          <Field label="Labels on its titles" hint="Added to every film or show in the collection, and taken off one that leaves it.">
+            <input className={inputClass} value={itemLabels} onChange={(e) => setItemLabels(e.target.value)} />
+          </Field>
+        </div>
         <ErrorNote error={save.error} />
       </div>
     </Modal>
   );
+}
+
+function labelText(raw: string[] | string | undefined): string {
+  return (Array.isArray(raw) ? raw : (raw ?? "").split(","))
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join(", ");
 }

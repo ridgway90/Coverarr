@@ -20,7 +20,7 @@ export interface Definition {
   source: string;
   source_file: string | null;
   builders: Builder[];
-  options: { sync_mode?: "append" | "sync"; collection_order?: "release" | "alpha" | "custom"; sort_title?: string; summary?: string } & Record<
+  options: { sync_mode?: "append" | "sync"; collection_order?: "release" | "alpha" | "custom"; sort_title?: string; summary?: string; label?: string[] | string; item_label?: string[] | string } & Record<
     string,
     unknown
   >;
