@@ -395,6 +395,29 @@ class JellyfinClient(MediaServerClient):
         row = await self._json("GET", f"/Users/{uid}/Items/{item_id}")
         return (row.get("ImageTags") or {}).get("Primary")
 
+    async def edit_labels(
+        self,
+        library_remote_id: str | None,
+        item_id: str,
+        kind: str,
+        add: list[str],
+        remove: list[str],
+    ) -> None:
+        if not add and not remove:
+            return
+        uid = await self.user_id()
+        item = await self._json("GET", f"/Users/{uid}/Items/{item_id}")
+        tags = [t for t in item.get("Tags") or [] if t.lower() not in {r.lower() for r in remove}]
+        tags += [t for t in add if t.lower() not in {x.lower() for x in tags}]
+        if tags == (item.get("Tags") or []):
+            return
+        item["Tags"] = tags
+        locked = list(item.get("LockedFields") or [])
+        if "Tags" not in locked:
+            locked.append("Tags")  # or a metadata refresh puts the old ones back
+        item["LockedFields"] = locked
+        await self._request("POST", f"/Items/{item_id}", json=item)
+
     async def fetch_background(
         self, item_id: str, background_ref: str, max_width: int | None = None
     ) -> bytes:

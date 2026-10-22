@@ -294,3 +294,72 @@ async def test_kometa_chart_replaces_its_titles(app, authed, fake_servers):
         await _sync(app, client, definition["id"])
     for srv in fake_servers.values():
         assert _titles(srv, _coll(srv, "TMDb Popular")) == ["Paddington 2"]
+
+
+async def test_collection_and_item_labels(app, authed, fake_servers):
+    """Labels go on the collection and its titles everywhere; ones dropped come off."""
+    client = authed
+    await add_servers(client)
+    await run_job(app, client, "import")
+    await client.put("/api/settings", json={"tmdb_api_key": KEY})
+    films = await _films(client)
+    resp = await client.post(
+        "/api/definitions",
+        json={
+            "name": "Labelled Picks",
+            "library_id": films,
+            "builders": [
+                {"type": "tmdb_movie", "value": 747},
+                {"type": "tmdb_movie", "value": 4638},
+            ],
+            "options": {
+                "label": "Kids, Favourites",
+                "item_label": ["Cornetto"],
+                "sync_mode": "sync",
+            },
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    definition = resp.json()
+    assert definition["options"]["label"] == ["Kids", "Favourites"]
+
+    def item_labels(srv, title):
+        item = srv.by_title(title)
+        return item.labels if srv.kind == "plex" else item.tags
+
+    with respx.mock(assert_all_called=False) as mock:
+        _tmdb(mock)
+        synced = await _sync(app, client, definition["id"])
+        assert not [n for n in synced["sync_result"]["notes"] if "label" in n], synced[
+            "sync_result"
+        ]
+        for srv in fake_servers.values():
+            assert _coll(srv, "Labelled Picks").labels == ["Kids", "Favourites"], srv.kind
+            for title in ("Shaun of the Dead", "Hot Fuzz"):
+                assert "Cornetto" in item_labels(srv, title), (srv.kind, title)
+
+        # A label taken off the definition comes off the collection; a title that leaves
+        # the list loses the item label.
+        await client.put(
+            f"/api/definitions/{definition['id']}",
+            json={
+                "options": {"label": ["Kids"]},
+                "builders": [{"type": "tmdb_movie", "value": 4638}],
+            },
+        )
+        await run_job(app, client, "import")  # labels as the servers now have them
+        await _sync(app, client, definition["id"])
+        for srv in fake_servers.values():
+            assert _coll(srv, "Labelled Picks").labels == ["Kids"], srv.kind
+            assert "Cornetto" in item_labels(srv, "Hot Fuzz")
+            assert "Cornetto" not in item_labels(srv, "Shaun of the Dead"), srv.kind
+
+
+def test_kometa_labels_are_read():
+    parsed = parse_collection_file(
+        "collections:\n  Kids:\n    tmdb_movie: 747\n    label: kids, family\n"
+        "    item_label: [Kids Film]\n",
+        "kids.yml",
+    )
+    assert parsed[0].options == {"label": "kids, family", "item_label": ["Kids Film"]}
+    assert "item_label" not in parsed[0].unsupported

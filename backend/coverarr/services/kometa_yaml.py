@@ -11,7 +11,7 @@ import yaml
 
 from coverarr.services.lists import BUILDERS, ListError, normalize_builder
 
-OPTIONS = ("sync_mode", "collection_order", "sort_title", "label", "summary")
+OPTIONS = ("sync_mode", "collection_order", "sort_title", "label", "item_label", "summary")
 
 
 @dataclass
@@ -114,7 +114,9 @@ def parse_collection_file(text: str, filename: str) -> list[ParsedCollection]:
                         coll.warnings.append(str(exc))
             elif key in OPTIONS:
                 coll.options[key] = (
-                    [str(v) for v in raw] if key == "label" and isinstance(raw, list) else raw
+                    [str(v) for v in raw]
+                    if key in ("label", "item_label") and isinstance(raw, list)
+                    else raw
                 )
             else:
                 coll.unsupported.append(str(key))

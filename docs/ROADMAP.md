@@ -50,7 +50,8 @@ Plex, Jellyfin and Emby, doing only the work that a change actually requires.
   daily sync
 - [x] Collection posters with overrides (TMDb's poster for new TMDb collections); created
   everywhere automatically
-- Kometa labels on collections; IMDb charts (no API)
+- [x] Labels on collections and their titles (Kometa's `label` / `item_label`)
+- IMDb charts (no API)
 
 ## Later / nice to have
 

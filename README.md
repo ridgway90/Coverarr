@@ -78,7 +78,11 @@ possible: it tracks what each server already has and only touches what actually 
   Each collection has a sync mode, *add only* or *exact* (exact removes titles that have left
   the lists, but never when a list fails to load), an order (release date, alphabetical or the
   list's own order; Plex keeps list order, Jellyfin/Emby sort those by name), and an optional
-  sort title and summary. *Sync* creates the collection on every server that's missing it and
+  sort title and summary. *Labels* (tags on Jellyfin/Emby) go on the collection, and *labels
+  on its titles* on every film or show in it, as Kometa's `label` and `item_label` do; useful
+  for Plex sharing restrictions and smart filters. A label you take off the collection comes
+  off the servers on the next sync, and a title that leaves the collection loses its item
+  labels; labels you set yourself on the servers are left alone. *Sync* creates the collection on every server that's missing it and
   adds the titles you have; a new collection from a TMDb collection gets TMDb's poster.
   Collections switched to *Keep in sync* sync daily (Settings → Automation) and in the weekly
   scan. Collections imported from Kometa start switched off, so nothing changes until you

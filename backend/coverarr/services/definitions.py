@@ -251,6 +251,13 @@ async def sync_definition(
     }
     # Never empty a collection because a list failed or came back empty.
     can_remove = mode == "sync" and not resolved.errors and bool(wanted)
+    # Labels on the collection, and on the titles in it (Kometa's label / item_label). Ones
+    # Coverarr applied last time and that are no longer wanted come off again.
+    previous = definition.sync_result or {}
+    labels = split_labels(options.get("label"))
+    item_labels = split_labels(options.get("item_label"))
+    gone_labels = _minus(previous.get("labels_applied") or [], labels)
+    gone_item_labels = _minus(previous.get("item_labels_applied") or [], item_labels)
     if resolved.errors and not wanted:
         result["notes"].append("Nothing synced: the lists couldn't be read")
         return result
@@ -325,6 +332,7 @@ async def sync_definition(
         remote_wanted = [remote_of[m] for m in wanted if m in remote_of]
         sc = existing.get(server.id)
         outcome: dict[str, Any] = {"added": 0, "removed": 0}
+        remove: list[str] = []
         library = RemoteLibrary(id=sl.remote_id, name=sl.name, kind=sl.kind)
         try:
             async with client_for(server) as client:
@@ -379,10 +387,79 @@ async def sync_definition(
                     if coll.summary:
                         sc.summary = coll.summary
                 result["notes"] += [f"{server.name}: {n}" for n in notes]
+                if labels or gone_labels or item_labels or gone_item_labels:
+                    try:
+                        await client.edit_labels(
+                            sl.remote_id, sc.remote_id, "collection", labels, gone_labels
+                        )
+                        await _label_members(
+                            session,
+                            client,
+                            server.id,
+                            sl,
+                            remote_wanted,
+                            remove,
+                            item_labels,
+                            gone_item_labels,
+                        )
+                    except MediaServerError as exc:
+                        result["notes"].append(f"{server.name}: couldn't set labels: {exc}")
         except MediaServerError as exc:
             outcome["error"] = str(exc)
         result["servers"][server.name] = outcome
+    result["labels_applied"] = labels
+    result["item_labels_applied"] = item_labels
     return result
+
+
+def split_labels(raw: Any) -> list[str]:
+    """Kometa takes a list or a comma-separated string."""
+    values = raw if isinstance(raw, list) else str(raw or "").split(",")
+    out: list[str] = []
+    for value in values:
+        label = str(value).strip()
+        if label and label.lower() not in {x.lower() for x in out}:
+            out.append(label)
+    return out
+
+
+def _minus(old: list[str], new: list[str]) -> list[str]:
+    keep = {x.lower() for x in new}
+    return [x for x in old if x.lower() not in keep]
+
+
+async def _label_members(
+    session: AsyncSession,
+    client: Any,
+    server_id: int,
+    sl: ServerLibrary,
+    members: list[str],
+    dropped: list[str],
+    labels: list[str],
+    gone: list[str],
+) -> None:
+    """Give the collection's titles its item labels, and take them off titles that left it.
+    Only titles whose labels (as last imported) need a change are touched."""
+    if not labels and not gone:
+        return
+    rows = await session.scalars(
+        select(ServerItem).where(
+            ServerItem.server_id == server_id, ServerItem.remote_id.in_(members + dropped)
+        )
+    )
+    member_set = set(members)
+    for row in rows:
+        have = {x.lower() for x in row.labels or []}
+        if row.remote_id in member_set:
+            add = [x for x in labels if x.lower() not in have]
+            remove = [x for x in gone if x.lower() in have]
+        else:  # removed from the collection this time
+            add, remove = [], [x for x in labels + gone if x.lower() in have]
+        if not add and not remove:
+            continue
+        await client.edit_labels(sl.remote_id, row.remote_id, row.kind, add, remove)
+        dropped_now = {x.lower() for x in remove}
+        row.labels = [x for x in row.labels or [] if x.lower() not in dropped_now] + add
 
 
 async def _lists(session: AsyncSession) -> ListClient:

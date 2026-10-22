@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.db import get_session
 from coverarr.models import Collection, CollectionDefinition, Library, ServerCollection
+from coverarr.services.definitions import split_labels
 from coverarr.services.lists import ListError, default_sync_mode, normalize_builder
 from coverarr.services.matching import normalize_collection_name
 
@@ -73,6 +74,9 @@ class Options(BaseModel):
     collection_order: Literal["release", "alpha", "custom"] = "release"
     sort_title: str | None = None
     summary: str | None = None
+    # Labels (Jellyfin/Emby: tags) on the collection, and on every title in it.
+    label: list[str] | str | None = None
+    item_label: list[str] | str | None = None
 
 
 class DefinitionIn(BaseModel):
@@ -100,11 +104,13 @@ def _builders(raw: list[Builder]) -> list[dict[str, str]]:
 
 def _options(options: Options, keep: dict[str, Any] | None = None) -> dict[str, Any]:
     """The options sent over the old ones; an empty value clears one. Kometa keys Coverarr
-    doesn't edit (e.g. label) stay."""
+    doesn't edit stay."""
     out = dict(keep or {})
     sent = options.model_dump(exclude_unset=keep is not None)
     for key, value in sent.items():
-        if isinstance(value, str):
+        if key in ("label", "item_label"):
+            value = split_labels(value) or None
+        elif isinstance(value, str):
             value = value.strip()
         if value in (None, ""):
             out.pop(key, None)

@@ -238,6 +238,18 @@ class MediaServerClient(ABC):
         """
 
     @abstractmethod
+    async def edit_labels(
+        self,
+        library_remote_id: str | None,
+        item_id: str,
+        kind: str,
+        add: list[str],
+        remove: list[str],
+    ) -> None:
+        """Add and remove labels (Jellyfin/Emby: tags) on a film, show or collection; other
+        labels are left alone."""
+
+    @abstractmethod
     async def fetch_background(
         self, item_id: str, background_ref: str, max_width: int | None = None
     ) -> bytes: ...
