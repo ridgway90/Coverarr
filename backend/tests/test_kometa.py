@@ -196,7 +196,9 @@ async def test_kometa_yaml_import_and_check(app, authed, fake_servers):
     assert comfort["options"]["sort_title"] == "!010_Comfort_J"
     assert comfort["collection"]["name"] == "Comfort J Films"
     assert [b["type"] for b in christmas["builders"]] == ["trakt_list", "trakt_list"]
-    assert christmas["unsupported"] == ["template"]
+    # Templates are expanded; this one isn't defined in the file, so it's reported.
+    assert christmas["unsupported"] == []
+    assert out["warnings"]["Christmas Movies"] == ["Template 'holiday' isn't in this file"]
 
     await client.put("/api/settings", json={"tmdb_api_key": "0123456789abcdef0123456789abcdef"})
     with respx.mock(assert_all_called=True) as mock:

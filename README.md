@@ -36,13 +36,16 @@ possible: it tracks what each server already has and only touches what actually 
   image is kept in the assets folder and becomes the base poster.
 - **Poster sets** (Settings → Poster sets): import a zip or folder of posters named by title,
   such as a set you've downloaded from ThePosterDB: `Hot Fuzz (2007).jpg`,
-  `Cornetto Collection.jpg`, `Spaced (1999) - Season 1.jpg`. ThePosterDB has no API and its
+  `Cornetto Collection.jpg`, `Spaced (1999) - Season 1.jpg`. Kometa's asset folders work too:
+  `Hot Fuzz (2007)/poster.jpg`, `background.jpg`, `Season01.jpg`, `S01E01.jpg`, or flat
+  (`Spaced (1999)_S01E01.jpg`). ThePosterDB has no API and its
   terms forbid automated downloads, so download the set yourself and import the zip.
   **MediUX** sets (and any Kometa metadata with image links) can be imported by pasting their
   *Kometa YAML*: `url_poster` and `url_background` keyed by TMDb/TVDb id or "Title (Year)",
   with `seasons` and their `episodes`. Posters, season posters, episode title cards and
   backgrounds are downloaded (over https, from MediUX, TMDb, GitHub, Imgur or a ThePosterDB
-  poster link you give it) and become the bases, ready to push.
+  poster link you give it) and become the bases, ready to push. In a Kometa metadata file,
+  `title`, `sort_title`, `summary` and `label` become metadata edits waiting under *Changes*.
   On a film, show or collection page, **Upload poster set** imports a zip for just that title:
   a show's poster and its seasons (files may be named just `Season 1.jpg` or `Specials.jpg`),
   or a collection's poster and its films. A single file named some other way
@@ -75,10 +78,16 @@ possible: it tracks what each server already has and only touches what actually 
   *Run the scan now* runs one straight away.
 - **List collections** (sidebar → List collections): collections built from lists, made in
   Coverarr or imported from Kometa's YAML. Sources, merged when there are several:
-  - TMDb lists, TMDb collections, single TMDb films/shows, Trakt lists, IMDb lists and titles
+  - TMDb lists, TMDb collections, single TMDb films/shows, Trakt lists, IMDb lists and titles,
+    MDBList lists (needs an MDBList API key), TMDb discover searches (`tmdb_discover`, e.g.
+    `with_genres=27&sort_by=popularity.desc&limit=50`)
+  - your own library: titles by genre, year, decade, studio, network, resolution or content
+    rating (`library_filter`, e.g. `genre=Comedy, decade=1990, genre!=Horror`); Kometa's
+    `plex_search` and `plex_all` become these
   - charts: TMDb popular, top rated, trending (day/week), now playing, upcoming, airing today,
-    on the air; Trakt trending, popular, anticipated, most watched this week, box office. You
-    choose how many titles, e.g. the top 20.
+    on the air; Trakt trending, popular, anticipated, most watched this week, box office;
+    AniList popular, trending and top rated (matched to your library through Kometa's anime
+    id mapping). You choose how many titles, e.g. the top 20.
 
   Each collection has a sync mode, *add only* or *exact* (exact removes titles that have left
   the lists, but never when a list fails to load), an order (release date, alphabetical or the
@@ -197,9 +206,19 @@ possible: it tracks what each server already has and only touches what actually 
     folder and import `/config/kometa`). Files are matched by Plex rating key and kept as clean
     base posters in the assets folder (see below).
   - *Collection files*: upload your Kometa collection YAML (plus `config.yml` to place them in
-    the right library and bring over TMDb/Trakt keys). TMDb lists, TMDb collections and Trakt
-    lists are understood; **Check** compares each list with your library and with the
-    collection Kometa built on each server.
+    the right library and bring over TMDb/Trakt/MDBList keys). Templates are expanded, and
+    every list source above is understood; **Check** compares each list with your library and
+    with the collection Kometa built on each server.
+  - From `config.yml`, Kometa's `- default:` collections become list collections: `imdb`,
+    `tmdb` and `trakt` charts; one per value your library has for `genre`, `decade`, `year`,
+    `resolution`, `network`, `studio` and `content_rating_*`; and `franchise`, which looks
+    every film up on TMDb and makes a collection for each franchise with two or more of your
+    films. Default overlays (`resolution`, with `use_edition`; `network`; `episode_info`;
+    `builder_level`) switch on the matching overlay layers for libraries that have no overlay
+    settings yet (overlays stay off until you enable them). Anything else (ratings, ribbons,
+    seasonal...) is listed as not supported. Metadata files and asset folders are listed to
+    import as above. Letterboxd lists aren't supported: its terms forbid scrapers and it has
+    no public API.
 - **Refresh one thing instead of re-importing.** Every film, show and collection page has a
   *Refresh* button that re-reads just that title (a show brings its seasons and episodes) or
   collection from every server, re-fingerprints any poster that changed and updates the review

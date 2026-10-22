@@ -29,7 +29,10 @@ ITEM_TYPES: dict[str, str] = {
     "episode": "Episode",
 }
 LIBRARY_KINDS = {"movies": "movie", "tvshows": "show"}
-FIELDS = "ProviderIds,SortName,ProductionYear,Tags,Overview,Path,Studios,Width,Height"
+FIELDS = (
+    "ProviderIds,SortName,ProductionYear,Tags,Overview,Path,Studios,Width,Height,"
+    "Genres,OfficialRating"
+)
 
 
 def _media_facts(row: dict[str, Any], kind: str) -> dict[str, Any]:
@@ -38,10 +41,17 @@ def _media_facts(row: dict[str, Any], kind: str) -> dict[str, Any]:
         resolution = resolution_from_size(row.get("Width"), row.get("Height"))
         if resolution:
             facts["resolution"] = resolution
-    elif kind == "show":
-        studios = [s.get("Name") for s in row.get("Studios") or [] if s.get("Name")]
+    studios = [s.get("Name") for s in row.get("Studios") or [] if s.get("Name")]
+    if kind == "show" and studios:
+        facts["network"] = studios[0]
+    if kind in ("movie", "show"):
+        # For collections built from the library (genre, studio, content rating).
+        if row.get("Genres"):
+            facts["genres"] = [str(g) for g in row["Genres"]]
         if studios:
-            facts["network"] = studios[0]
+            facts["studio"] = studios[0]
+        if row.get("OfficialRating"):
+            facts["content_rating"] = row["OfficialRating"]
     return facts
 
 

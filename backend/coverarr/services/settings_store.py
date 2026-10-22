@@ -12,10 +12,11 @@ PUBLIC_KEYS = {
     "tmdb_api_key",
     "trakt_client_id",
     "trakt_client_secret",
+    "mdblist_api_key",
     "poster_match_threshold",
     "server_load",
 }
-SECRET_KEYS = {"tmdb_api_key", "trakt_client_secret"}
+SECRET_KEYS = {"tmdb_api_key", "trakt_client_secret", "mdblist_api_key"}
 
 DEFAULTS: dict[str, Any] = {
     # Max Hamming distance (of 64 bits) for two posters to count as "the same image".

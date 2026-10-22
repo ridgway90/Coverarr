@@ -79,6 +79,10 @@ export default function PosterSetImport() {
         <li>
           <code>{"{tmdb-4638}"}</code> or <code>{"{tvdb-75592}"}</code> in a name pins it to that id
         </li>
+        <li>
+          Kometa's asset folders: <code>Spaced (1999)/poster.jpg</code>, <code>background.jpg</code>, <code>Season01.jpg</code>,{" "}
+          <code>S01E01.jpg</code> (or flat, <code>Spaced (1999)_S01E01.jpg</code>)
+        </li>
       </ul>
       <p className="mt-2 text-sm text-muted">
         Each poster is saved under <code>/config/assets</code> and becomes the base poster, ready to push under{" "}
@@ -137,7 +141,9 @@ export default function PosterSetImport() {
           </div>
           <p className="mt-1 text-xs text-muted">
             On a MediUX set, copy its <em>Kometa YAML</em> and paste it here (or any Kometa metadata with <code>url_poster</code> /{" "}
-            <code>url_background</code>). Posters, season posters, episode title cards and backgrounds are all imported.
+            <code>url_background</code>). Posters, season posters, episode title cards and backgrounds are all imported, and a Kometa
+            metadata file's <code>title</code>, <code>sort_title</code>, <code>summary</code> and <code>label</code> become metadata
+            edits waiting under <em>Changes</em>.
           </p>
           <textarea
             className={inputClass + " mt-3 h-28 py-2 font-mono text-xs"}
@@ -186,6 +192,7 @@ function SetResult({ job }: { job: Job }) {
         {r.unreadable ? ` ${r.unreadable} unreadable.` : ""}
         {r.skipped ? ` ${r.skipped} other files ignored.` : ""}
         {r.failed ? ` ${r.failed} couldn't be downloaded or read (see Activity).` : ""}
+        {r.edited ? ` Edited the title, summary or labels of ${r.edited}.` : ""}
       </div>
       {unmatched.length > 0 && (
         <details className="mt-1">

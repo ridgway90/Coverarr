@@ -24,7 +24,7 @@ from coverarr.services.artwork import (
     tmdb_posters,
 )
 from coverarr.services.kometa_yaml import KometaYamlError
-from coverarr.services.set_links import parse_artwork_yaml
+from coverarr.services.set_links import parse_artwork_yaml, parse_metadata_edits
 
 router = APIRouter(prefix="/api", tags=["artwork"])
 
@@ -189,9 +189,14 @@ class SetYaml(BaseModel):
 async def import_poster_set_yaml(body: SetYaml, request: Request):
     """Kometa-style YAML with url_poster / url_background (e.g. MediUX's Kometa YAML)."""
     try:
-        images = await asyncio.to_thread(parse_artwork_yaml, body.yaml)
+        images = await asyncio.to_thread(parse_artwork_yaml, body.yaml, True)
     except KometaYamlError as exc:
         raise HTTPException(422, str(exc)) from exc
+    edits = await asyncio.to_thread(parse_metadata_edits, body.yaml)
+    if not images and not edits:
+        raise HTTPException(
+            422, "Found no url_poster, url_background, title, sort_title, summary or label in it"
+        )
     job = await request.app.state.jobs.enqueue(
         "url_artwork",
         {
@@ -200,7 +205,7 @@ async def import_poster_set_yaml(body: SetYaml, request: Request):
             "keep_choices": body.keep_choices,
         },
     )
-    return {"job_id": job.id, "images": len(images)}
+    return {"job_id": job.id, "images": len(images), "edits": len(edits)}
 
 
 class TmdbReset(BaseModel):

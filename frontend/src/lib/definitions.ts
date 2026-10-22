@@ -96,6 +96,13 @@ export const SOURCE_TYPES: SourceType[] = [
   { type: "imdb_chart", label: "IMDb chart", hint: "Which chart", kinds: ["movie", "show"], choices: IMDB_CHARTS },
   { type: "imdb_list", label: "IMDb list", hint: "https://www.imdb.com/list/ls…", kinds: ["movie", "show"] },
   { type: "imdb_id", label: "IMDb title", hint: "tt… id or URL", kinds: ["movie", "show"] },
+  { type: "mdblist_list", label: "MDBList list", hint: "https://mdblist.com/lists/…", kinds: ["movie", "show"] },
+  { type: "tmdb_discover", label: "TMDb discover", hint: "with_genres=27&sort_by=popularity.desc&limit=50", kinds: ["movie", "show"] },
+  { type: "anilist_popular", label: "AniList popular", hint: "How many titles", kinds: ["movie", "show"], chart: true },
+  { type: "anilist_trending", label: "AniList trending", hint: "How many titles", kinds: ["movie", "show"], chart: true },
+  { type: "anilist_top_rated", label: "AniList top rated", hint: "How many titles", kinds: ["movie", "show"], chart: true },
+  { type: "anilist_id", label: "AniList anime", hint: "AniList id", kinds: ["movie", "show"] },
+  { type: "library_filter", label: "From your library", hint: "genre=Comedy, decade=1990, studio=…", kinds: ["movie", "show"] },
 ];
 
 export const SOURCE_BY_TYPE = new Map(SOURCE_TYPES.map((s) => [s.type, s]));
@@ -118,6 +125,10 @@ export function builderLink(b: Builder): { label: string; href?: string } {
   }
   if (b.type === "imdb_list") return { label: `IMDb list ${b.value}`, href: `https://www.imdb.com/list/${b.value}/` };
   if (b.type === "imdb_id") return { label: `IMDb ${b.value}`, href: `https://www.imdb.com/title/${b.value}/` };
+  if (b.type === "mdblist_list") return { label: `MDBList ${b.value}`, href: `https://mdblist.com/lists/${b.value}` };
+  if (b.type === "tmdb_discover") return { label: `TMDb discover: ${decodeURIComponent(b.value).replace(/&/g, ", ")}` };
+  if (b.type === "anilist_id") return { label: `AniList ${b.value}`, href: `https://anilist.co/anime/${b.value}` };
+  if (b.type === "library_filter") return { label: `Library: ${b.value}` };
   if (b.type === "trakt_list") return { label: `Trakt ${b.value.replace(/^https?:\/\/(www\.)?trakt\.tv\//, "")}`, href: b.value };
   return { label: `${b.type}: ${b.value}` };
 }

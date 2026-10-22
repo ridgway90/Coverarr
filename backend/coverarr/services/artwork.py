@@ -254,12 +254,59 @@ class SetFile:
     year: int | None
     season: int | None  # 0 = specials
     ids: dict[str, str]
+    what: str = "poster"  # poster | background
+    episode: int | None = None
+
+
+# Kometa's asset directory: "Title (Year)/poster.jpg", ".../background.jpg",
+# ".../Season01.jpg", ".../S01E01.jpg", or flat "Title (Year)_background.jpg",
+# "Title (Year)_Season01.jpg", "Title (Year)_S01E01.jpg".
+ASSET_FILE = re.compile(
+    r"^(?:(?P<poster>poster)|(?P<background>background|fanart)"
+    r"|season\s*(?P<season>\d+)|s(?P<s>\d+)e(?P<e>\d+))$",
+    re.IGNORECASE,
+)
+FLAT_ASSET = re.compile(
+    r"^(?P<title>.+?)_(?:(?P<background>background)|season\s*(?P<season>\d+)"
+    r"|s(?P<s>\d+)e(?P<e>\d+))$",
+    re.IGNORECASE,
+)
+
+
+def _asset_parts(path: PurePosixPath) -> tuple[str, str, int | None, int | None] | None:
+    """(title stem, poster|background, season, episode) for a Kometa asset-style name."""
+    m = ASSET_FILE.match(path.stem)
+    if m and len(path.parts) >= 2:
+        title = path.parts[-2]
+    else:
+        m = FLAT_ASSET.match(path.stem)
+        if not m:
+            return None
+        title = m.group("title")
+    groups = m.groupdict()
+    if groups.get("background"):
+        return title, "background", None, None
+    if groups.get("season"):
+        return title, "poster", int(groups["season"]), None
+    if groups.get("s"):
+        return title, "poster", int(groups["s"]), int(groups["e"])
+    return title, "poster", None, None
 
 
 def parse_set_name(name: str) -> SetFile | None:
     path = PurePosixPath(name.replace("\\", "/"))
     if path.suffix.lower() not in IMAGE_SUFFIXES or path.name.startswith("."):
         return None
+    if asset := _asset_parts(path):
+        title, what, season, episode = asset
+        parsed = parse_set_name(f"{title}{path.suffix}")
+        if parsed is None:
+            return None
+        parsed.name = path.name if len(path.parts) < 2 else f"{path.parts[-2]}/{path.name}"
+        parsed.what = what
+        if season is not None:
+            parsed.season, parsed.episode = season, episode
+        return parsed
     stem = path.stem
     ids = {k.lower(): v for k, v in ID_TAG.findall(stem)}
     stem = re.sub(r"\s+", " ", ID_TAG.sub("", stem)).strip()
@@ -279,7 +326,13 @@ def parse_set_name(name: str) -> SetFile | None:
 class SetMatcher:
     """Finds what each file in a poster set belongs to."""
 
-    def __init__(self, items: list[Any], seasons: list[Any], collections: list[Any]):
+    def __init__(
+        self,
+        items: list[Any],
+        seasons: list[Any],
+        collections: list[Any],
+        episodes: list[Any] | None = None,
+    ):
         self.by_title: dict[str, list[Any]] = defaultdict(list)
         self.by_id: dict[tuple[str, str], list[Any]] = defaultdict(list)
         for it in items:
@@ -288,6 +341,7 @@ class SetMatcher:
                 if getattr(it, f"{key}_id"):
                     self.by_id[(key, str(getattr(it, f"{key}_id")))].append(it)
         self.seasons = {(s.parent_id, s.season_number): s.id for s in seasons}
+        self.episodes = {(e.parent_id, e.episode_number): e.id for e in episodes or []}
         self.collections: dict[str, list[int]] = defaultdict(list)
         for c in collections:
             self.collections[c.normalized_name].append(c.id)
@@ -309,6 +363,9 @@ class SetMatcher:
             ids = [
                 self.seasons[(s.id, f.season)] for s in shows if (s.id, f.season) in self.seasons
             ]
+            if f.episode is not None:
+                eps = self.episodes
+                ids = [eps[(s, f.episode)] for s in ids if (s, f.episode) in eps]
             return ids, []
         is_collection = f.year is None and re.search(r"\bcollection$", f.title, re.IGNORECASE)
         colls = self.collections.get(normalize_collection_name(f.title), [])
@@ -411,7 +468,15 @@ async def _poster_set(ctx: JobContext) -> dict[str, Any]:
         items = (await session.execute(item_query)).all()
         seasons = (await session.execute(season_query)).all()
         colls = (await session.execute(coll_query)).all()
-    matcher = SetMatcher(items, seasons, colls)
+        episodes = (
+            await session.execute(
+                select(MediaItem.id, MediaItem.parent_id, MediaItem.episode_number).where(
+                    MediaItem.kind == "episode",
+                    MediaItem.parent_id.in_([s.id for s in seasons]),
+                )
+            )
+        ).all()
+    matcher = SetMatcher(items, seasons, colls, episodes)
 
     counts: dict[str, int] = defaultdict(int)
     unmatched: list[str] = []
@@ -465,22 +530,41 @@ async def _poster_set(ctx: JobContext) -> dict[str, Any]:
                             if owner_items
                             else await session.get(Collection, owner_colls[0])
                         )
-                        choose = not (keep_choices and target.poster_source)
+                        background = parsed.what == "background"
+                        choose = not (
+                            keep_choices
+                            and (target.background_source if background else target.poster_source)
+                        )
                         try:
                             if ready is None:
                                 raise ArtworkError("That file isn't a JPEG, PNG or WebP image")
-                            await save_artwork(
-                                session,
-                                config_dir,
-                                source="set",
-                                data=data,
-                                name=parsed.name,
-                                media_item_id=owner_items[0] if owner_items else None,
-                                collection_id=owner_colls[0] if owner_colls else None,
-                                choose=choose,
-                                taken=taken,
-                                prepared=ready,
-                            )
+                            if background:
+                                from coverarr.services.backgrounds import save_background
+
+                                if not owner_items or target.kind not in ("movie", "show"):
+                                    continue
+                                await save_background(
+                                    session,
+                                    config_dir,
+                                    media_item_id=target.id,
+                                    source="set",
+                                    data=data,
+                                    name=PurePosixPath(parsed.name).name,
+                                    choose=choose,
+                                )
+                            else:
+                                await save_artwork(
+                                    session,
+                                    config_dir,
+                                    source="set",
+                                    data=data,
+                                    name=parsed.name,
+                                    media_item_id=owner_items[0] if owner_items else None,
+                                    collection_id=owner_colls[0] if owner_colls else None,
+                                    choose=choose,
+                                    taken=taken,
+                                    prepared=ready,
+                                )
                         except ArtworkError as exc:
                             counts["unreadable"] += 1
                             await ctx.log(f"{parsed.name}: {exc}")
