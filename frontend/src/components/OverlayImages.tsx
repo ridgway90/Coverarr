@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Images, Plus, Trash2, Upload } from "lucide-react";
+import { FolderInput, Images, Plus, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, qs, uploadWithProgress } from "../lib/api";
 import { Button, Card, ErrorNote, Modal, Spinner, Tabs, cx, inputClass, selectClass } from "./ui";
@@ -45,6 +45,162 @@ const COLUMNS = [
 
 const REFRESH = ["overlay-slots", "overlays", "changes"];
 
+/** What happened to each image of an uploaded (or re-sorted) pack. */
+export interface SortReport {
+  placed: { file: string; slot: string; label: string }[];
+  in_place: number;
+  duplicates: { file: string; slot: string; label: string }[];
+  kept: number;
+  unknown: string[];
+  failed: { file: string; error: string }[];
+}
+
+function SlotOptions({ slots }: { slots: Slot[] }) {
+  return (
+    <>
+      {GROUPS.map((g) => (
+        <optgroup key={g.id} label={g.label}>
+          {slots
+            .filter((s) => s.group === g.id)
+            .map((s) => (
+              <option key={s.path} value={s.path}>
+                {s.label}
+                {s.exact ? " (replace)" : ""}
+              </option>
+            ))}
+        </optgroup>
+      ))}
+    </>
+  );
+}
+
+/** The result of sorting a pack: what went where, and a slot to pick for anything left over. */
+export function SortResults({ report, onClose }: { report: SortReport; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["overlay-slots"], queryFn: () => api.get<SlotsData>("/api/overlays/slots") });
+  const leftovers = useMemo(
+    () => [
+      ...report.unknown.map((file) => ({ file, note: "Not recognised" })),
+      ...report.duplicates.map((d) => ({ file: d.file, note: `Another image already fills ${d.label}` })),
+    ],
+    [report],
+  );
+  // "" = leave it in the pack, "delete", or a slot path.
+  const [choice, setChoice] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const chosen = leftovers.filter((l) => choice[l.file]);
+  const targets = chosen.map((l) => choice[l.file]).filter((c) => c !== "delete");
+  const clash = targets.length !== new Set(targets).size;
+  const save = async () => {
+    setSaving(true);
+    const failed: Record<string, string> = {};
+    for (const { file } of chosen) {
+      try {
+        if (choice[file] === "delete") await api.del(`/api/overlays/pack/file${qs({ path: file })}`);
+        else await api.post("/api/overlays/slots/assign", { source: file, path: choice[file] });
+      } catch (err) {
+        failed[file] = err instanceof Error ? err.message : String(err);
+      }
+    }
+    setSaving(false);
+    setErrors(failed);
+    for (const key of REFRESH) qc.invalidateQueries({ queryKey: [key] });
+    if (!Object.keys(failed).length) onClose();
+  };
+  const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+  return (
+    <Modal
+      open
+      wide
+      onClose={onClose}
+      title="Overlay images sorted"
+      footer={
+        leftovers.length ? (
+          <>
+            <Button onClick={onClose}>Leave the rest</Button>
+            <Button variant="primary" loading={saving} disabled={!chosen.length || clash} onClick={save}>
+              Save {chosen.length || ""}
+            </Button>
+          </>
+        ) : (
+          <Button variant="primary" onClick={onClose}>
+            Done
+          </Button>
+        )
+      }
+    >
+      <ul className="space-y-1 text-sm">
+        {report.placed.length > 0 && (
+          <li>
+            <details>
+              <summary className="cursor-pointer">
+                <strong>{plural(report.placed.length, "image")}</strong> moved into their slots, renamed and converted to PNG
+              </summary>
+              <ul className="ml-4 mt-1 max-h-48 overflow-y-auto text-xs text-muted">
+                {report.placed.map((p) => (
+                  <li key={p.file}>
+                    <code>{p.file}</code> → {p.label}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          </li>
+        )}
+        {report.in_place > 0 && <li>{plural(report.in_place, "image")} already named and placed as the overlays expect</li>}
+        {report.kept > 0 && <li>{plural(report.kept, "network logo")} kept for networks none of your shows use yet</li>}
+        {report.failed.map((f) => (
+          <li key={f.file} className="text-danger">
+            <code>{f.file}</code>: {f.error}
+          </li>
+        ))}
+        {!report.placed.length && !report.in_place && !report.kept && !leftovers.length && <li>No images to sort.</li>}
+      </ul>
+      {leftovers.length > 0 && (
+        <>
+          <p className="mb-2 mt-4 text-sm text-muted">
+            Coverarr couldn't tell where {leftovers.length === 1 ? "this one goes" : `these ${leftovers.length} go`}. Pick a slot, or leave them in
+            the pack (an image layer can still use them by path).
+          </p>
+          {!data ? (
+            <Spinner />
+          ) : (
+            <ul className="max-h-[50vh] space-y-2 overflow-y-auto">
+              {leftovers.map(({ file, note }) => (
+                <li key={file} className="flex flex-wrap items-center gap-3">
+                  <img
+                    src={`/api/overlays/pack/file${qs({ path: file })}`}
+                    alt=""
+                    loading="lazy"
+                    className="checkerboard h-10 w-16 rounded border border-line object-contain"
+                  />
+                  <span className="min-w-0 flex-1 text-sm">
+                    <span className="block truncate" title={file}>
+                      {file}
+                    </span>
+                    <span className="text-xs text-muted">{note}</span>
+                  </span>
+                  <select
+                    className={cx(selectClass, "h-9 w-64")}
+                    value={choice[file] ?? ""}
+                    onChange={(e) => setChoice({ ...choice, [file]: e.target.value })}
+                  >
+                    <option value="">Leave in the pack</option>
+                    <option value="delete">Delete it</option>
+                    <SlotOptions slots={data.slots} />
+                  </select>
+                  {errors[file] && <span className="w-full text-xs text-danger">{errors[file]}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+          {clash && <p className="mt-2 text-sm text-danger">Two images are set to the same slot.</p>}
+        </>
+      )}
+    </Modal>
+  );
+}
+
 function thumbUrl(slot: Slot): string | null {
   return slot.current ? `/api/overlays/pack/file${qs({ path: slot.current, v: slot.version })}` : null;
 }
@@ -58,6 +214,14 @@ export default function OverlayImages() {
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [bulk, setBulk] = useState<{ file: File; path: string }[] | null>(null);
+  const [report, setReport] = useState<SortReport | null>(null);
+  const sort = useMutation({
+    mutationFn: () => api.post<SortReport>("/api/overlays/pack/sort", {}),
+    onSuccess: (r) => {
+      refresh();
+      setReport(r);
+    },
+  });
   const singleRef = useRef<HTMLInputElement>(null);
   const bulkRef = useRef<HTMLInputElement>(null);
   const target = useRef<string | null>(null);
@@ -164,7 +328,17 @@ export default function OverlayImages() {
             them; the SD badges cover 576p and 480p.
           </p>
         </div>
-        <div>
+        <div className="flex flex-wrap gap-2">
+          {data?.pack && (
+            <Button
+              icon={<FolderInput className="size-4" />}
+              loading={sort.isPending}
+              onClick={() => sort.mutate()}
+              title="Move every image in the pack that's in the wrong place or has the wrong name into its slot"
+            >
+              Sort pack images
+            </Button>
+          )}
           <input ref={singleRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => e.target.files?.[0] && uploadOne(e.target.files[0])} />
           <input ref={bulkRef} type="file" multiple accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => e.target.files?.length && pickSeveral(e.target.files)} />
           <Button icon={<Upload className="size-4" />} onClick={() => bulkRef.current?.click()}>
@@ -172,7 +346,7 @@ export default function OverlayImages() {
           </Button>
         </div>
       </div>
-      <ErrorNote error={error ?? remove.error} />
+      <ErrorNote error={error ?? remove.error ?? sort.error} />
       {isLoading || !data ? (
         <Spinner />
       ) : (
@@ -230,6 +404,7 @@ export default function OverlayImages() {
           )}
         </>
       )}
+      {report && <SortResults report={report} onClose={() => setReport(null)} />}
       {bulk && <BulkUpload items={bulk} slots={slots} onClose={() => setBulk(null)} upload={upload} onDone={refresh} />}
     </Card>
   );
@@ -303,18 +478,7 @@ function BulkUpload({
               onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, path: e.target.value } : r)))}
             >
               <option value="">Skip</option>
-              {GROUPS.map((g) => (
-                <optgroup key={g.id} label={g.label}>
-                  {slots
-                    .filter((s) => s.group === g.id)
-                    .map((s) => (
-                      <option key={s.path} value={s.path}>
-                        {s.label}
-                        {s.exact ? " (replace)" : ""}
-                      </option>
-                    ))}
-                </optgroup>
-              ))}
+              <SlotOptions slots={slots} />
             </select>
             {errors[row.file.name] && <span className="w-full text-xs text-danger">{errors[row.file.name]}</span>}
           </li>

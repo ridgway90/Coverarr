@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowDown, ArrowUp, FileUp, Layers, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import OverlayImages from "../components/OverlayImages";
+import OverlayImages, { SortResults, type SortReport } from "../components/OverlayImages";
 import { Button, Card, ErrorNote, PageHeader, Spinner, Tabs, cx, inputClass, selectClass, useDebounced } from "../components/ui";
 import { api, qs, uploadWithProgress, type LayerType, type OverlayLayer, type OverlayLibrary, type OverlayPack } from "../lib/api";
 
@@ -69,15 +69,23 @@ function PackCard({ pack }: { pack: OverlayPack | null }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [report, setReport] = useState<SortReport | null>(null);
+  const replacing = useRef(false);
+  const pick = (replace: boolean) => {
+    if (replace && !confirm("Replace every overlay image with the ones in the zip?")) return;
+    replacing.current = replace;
+    fileRef.current?.click();
+  };
   const upload = async (file: File) => {
     setError(null);
     const form = new FormData();
     form.append("file", file);
+    if (replacing.current) form.append("replace", "true");
     setProgress(0);
     try {
-      await uploadWithProgress("/api/overlays/pack", form, setProgress);
-      qc.invalidateQueries({ queryKey: ["overlays"] });
-      qc.invalidateQueries({ queryKey: ["changes"] });
+      const result = await uploadWithProgress<{ sorted: SortReport }>("/api/overlays/pack", form, setProgress);
+      setReport(result.sorted);
+      for (const key of ["overlays", "overlay-slots", "changes"]) qc.invalidateQueries({ queryKey: [key] });
     } catch (err) {
       setError(err);
     } finally {
@@ -95,13 +103,14 @@ function PackCard({ pack }: { pack: OverlayPack | null }) {
           {pack ? (
             <p className="mt-1 text-sm text-muted">
               <strong className="text-text">{pack.name}</strong>: {pack.images.toLocaleString()} images in{" "}
-              <code>/config/assets/overlays/{pack.name}</code>.
+              <code>/config/assets/overlays/{pack.name}</code>. Adding another zip sorts its images into the slots, replacing
+              those it has a newer image for.
             </p>
           ) : (
             <p className="mt-1 text-sm text-muted">
-              Upload the overlay images as a zip, e.g. the jmxd pack (the folder with <code>gradient_top.png</code>,{" "}
-              <code>resolution/</code>, <code>edition/</code> and <code>network-images/</code>). It's unpacked into{" "}
-              <code>/config/assets/overlays</code>.
+              Upload the overlay images as a zip, e.g. the jmxd pack or any zip of badges and logos. Each image is sorted into
+              its slot under Overlay images below, renamed and converted as the overlays expect; anything Coverarr can't
+              place is listed for you to pick.
             </p>
           )}
           {pack && (
@@ -120,14 +129,20 @@ function PackCard({ pack }: { pack: OverlayPack | null }) {
             </details>
           )}
         </div>
-        <div>
+        <div className="flex flex-wrap gap-2">
           <input ref={fileRef} type="file" accept=".zip" className="hidden" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-          <Button icon={<FileUp className="size-4" />} loading={progress !== null} onClick={() => fileRef.current?.click()}>
-            {progress !== null ? `Uploading ${Math.round(progress * 100)}%` : pack ? "Replace pack" : "Upload pack (.zip)"}
+          <Button icon={<FileUp className="size-4" />} loading={progress !== null} onClick={() => pick(false)}>
+            {progress !== null ? `Uploading ${Math.round(progress * 100)}%` : pack ? "Add images (.zip)" : "Upload pack (.zip)"}
           </Button>
+          {pack && progress === null && (
+            <Button variant="ghost" onClick={() => pick(true)}>
+              Replace pack
+            </Button>
+          )}
         </div>
       </div>
       <ErrorNote error={error} />
+      {report && <SortResults report={report} onClose={() => setReport(null)} />}
     </Card>
   );
 }

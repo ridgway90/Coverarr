@@ -258,10 +258,15 @@ def install_pack(config_dir: Path, zip_path: Path, name: str) -> dict[str, Any]:
             raise OverlayError("That zip has no overlay images in it")
         if sum(m.file_size for m in members) > MAX_PACK_BYTES:
             raise OverlayError("That overlay pack is larger than 500 MB unpacked")
-        # Strip folders every file shares (e.g. "jmxd/"), so the pack root holds the images.
+        # Strip folders every file shares (e.g. "jmxd/"), so the pack root holds the images;
+        # but not one that says what they are (a zip of just "network/" logos).
         parts = [PurePosixPath(m.filename.replace("\\", "/")).parts for m in members]
         common = 0
-        while all(len(p) > common + 1 for p in parts) and len({p[common] for p in parts}) == 1:
+        while (
+            all(len(p) > common + 1 for p in parts)
+            and len({p[common] for p in parts}) == 1
+            and not any(w in parts[0][common].lower() for w in ("network", "resolution", "edition"))
+        ):
             common += 1
         staging = Path(tempfile.mkdtemp(dir=config_dir, prefix=".overlay-pack-"))
         try:

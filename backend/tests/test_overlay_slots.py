@@ -128,3 +128,78 @@ async def test_upload_into_slots(app, authed, fake_servers):
         {"name": "4K HDR.png", "path": "resolution/4khdr.png"},
         {"name": "cat.png", "path": None},
     ]
+
+
+def _zip(files: dict[str, bytes]) -> bytes:
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+    return buf.getvalue()
+
+
+async def test_pack_upload_sorts_images_into_slots(app, authed, fake_servers):
+    client = authed
+    await add_servers(client)
+    await run_job(app, client, "import")
+    pack = _zip(
+        {
+            "My Pack/badges/4K Dolby Vision.png": _png(),
+            "My Pack/badges/1080p.png": _png(),
+            "My Pack/editions/Directors Cut.jpg": _png(fmt="JPEG"),
+            "My Pack/logos/network/Channel 4.png": _png(),
+            "My Pack/logos/network/HBO.png": _png(),
+            "My Pack/gradient_bottom.png": _png(),
+            "My Pack/random/holiday.png": _png(),
+        }
+    )
+    resp = await client.post(
+        "/api/overlays/pack", files={"file": ("my pack.zip", pack, "application/zip")}
+    )
+    assert resp.status_code == 200, resp.text
+    report = resp.json()["sorted"]
+    placed = {p["file"]: p["slot"] for p in report["placed"]}
+    assert placed == {
+        "badges/4K Dolby Vision.png": "resolution/4kdv.png",
+        "badges/1080p.png": "resolution/1080p.png",
+        "editions/Directors Cut.jpg": "edition/directors.png",
+        "logos/network/Channel 4.png": "network-images/images/network/color/Channel 4.png",
+    }
+    assert report["in_place"] == 1  # the gradient
+    assert report["kept"] == 1  # HBO: no show uses it yet
+    assert report["unknown"] == ["random/holiday.png"]
+
+    root = pack_dir(app.state.config.config_dir, "my pack")
+    assert (root / "network-images/images/network/color/HBO.png").is_file()
+    assert not (root / "badges").exists()  # emptied folders are removed
+    slots = {s["path"]: s for s in (await client.get("/api/overlays/slots")).json()["slots"]}
+    for path in placed.values():
+        assert slots[path]["exact"], path
+
+    # Anything it couldn't tell goes where it's told.
+    resp = await client.post(
+        "/api/overlays/slots/assign",
+        json={"source": "random/holiday.png", "path": "resolution/720p.png"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert not (root / "random").exists()
+
+    # A second zip adds to the pack (two files for one slot: the first wins).
+    more = _zip({"4k.png": _png(), "4K DV.png": _png(), "UHD Dolby Vision.png": _png()})
+    report = (
+        await client.post(
+            "/api/overlays/pack", files={"file": ("more.zip", more, "application/zip")}
+        )
+    ).json()["sorted"]
+    assert {p["slot"] for p in report["placed"]} == {"resolution/4k.png", "resolution/4kdv.png"}
+    assert [d["slot"] for d in report["duplicates"]] == ["resolution/4kdv.png"]
+    listing = (await client.get("/api/overlays/slots")).json()
+    assert listing["pack"] == "my pack"
+    slots = {s["path"]: s for s in listing["slots"]}
+    assert slots["resolution/720p.png"]["exact"] and slots["edition/directors.png"]["exact"]
+
+    # Sorting what's already there finds nothing to move.
+    report = (await client.post("/api/overlays/pack/sort")).json()
+    assert not report["placed"] and not report["unknown"]

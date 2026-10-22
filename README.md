@@ -95,8 +95,15 @@ possible: it tracks what each server already has and only touches what actually 
   already finished, such as posters already pushed, is kept.
 - **A–Z bar** on films, TV and collections ("The"/"A"/"An" are skipped, so *The Holiday* is
   under H).
-- **Overlays** (sidebar → Overlays). Upload an overlay pack once (e.g. the jmxd zip; it's
-  unpacked into `/config/assets/overlays`), then switch overlays on per library. The default
+- **Overlays** (sidebar → Overlays). Upload an overlay pack (e.g. the jmxd zip, or any zip of
+  badges and logos; it's unpacked into `/config/assets/overlays`), then switch overlays on per
+  library. Every image in the zip is sorted into its slot under *Overlay images* (below),
+  renamed and converted as the overlays expect, whatever the zip calls it or whichever folder
+  it's in ("badges/4K Dolby Vision.png" becomes `resolution/4kdv.png`). Logos for networks none
+  of your shows use yet are kept for later. Anything Coverarr can't place is listed so you can
+  pick its slot, leave it in the pack or delete it. Uploading another zip adds its images to
+  the pack, replacing the slots it has newer images for; *Replace pack* starts over, and
+  *Sort pack images* tidies a pack that's already there. The default
   layers follow a typical Kometa jmxd setup: top and bottom gradients and a resolution badge
   (4K / 1080p… with DV, HDR, HDR10+) top-left on films, shows, seasons and episodes (episodes use
   the episode gradients), the network logo bottom-left on shows, and an optional edition banner.
