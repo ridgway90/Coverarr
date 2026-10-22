@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, FileUp, FolderOpen, Upload } from "lucide-react";
+import { CheckCircle2, FileCode, FileUp, FolderOpen, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 import { api, uploadWithProgress, type Job } from "../lib/api";
 import { Button, Card, ErrorNote, formatDate, inputClass } from "./ui";
 
-/** Import a zip or folder of posters named by title, e.g. a set downloaded from ThePosterDB. */
+const SET_JOBS = ["poster_set", "url_artwork"];
+
+/** Import a set of posters: a zip, a folder, or MediUX/Kometa YAML with image links. */
 export default function PosterSetImport() {
   const qc = useQueryClient();
   const [progress, setProgress] = useState<number | null>(null);
@@ -15,8 +17,8 @@ export default function PosterSetImport() {
   const jobs = useQuery({
     queryKey: ["jobs", "poster_set"],
     queryFn: () => api.get<Job[]>("/api/jobs?limit=100"),
-    select: (all) => all.filter((j) => j.kind === "poster_set"),
-    refetchInterval: (q) => (q.state.data?.some((j) => j.kind === "poster_set" && ["queued", "running"].includes(j.status)) ? 1500 : false),
+    select: (all) => all.filter((j) => SET_JOBS.includes(j.kind)),
+    refetchInterval: (q) => (q.state.data?.some((j) => SET_JOBS.includes(j.kind) && ["queued", "running"].includes(j.status)) ? 1500 : false),
   });
   const latest = jobs.data?.[0];
 
@@ -44,6 +46,14 @@ export default function PosterSetImport() {
   const fromFolder = useMutation({
     mutationFn: () => api.post("/api/poster-sets/folder", { path, keep_choices: keepChoices }),
     onSuccess: afterStart,
+  });
+  const [yamlText, setYamlText] = useState("");
+  const fromYaml = useMutation({
+    mutationFn: () => api.post("/api/poster-sets/yaml", { yaml: yamlText, keep_choices: keepChoices }),
+    onSuccess: () => {
+      setYamlText("");
+      afterStart();
+    },
   });
 
   return (
@@ -120,8 +130,28 @@ export default function PosterSetImport() {
           </div>
         </div>
       </div>
+      <div className="mt-4">
+        <div className="rounded-lg border border-line p-4">
+          <div className="flex items-center gap-2 font-medium">
+            <FileCode className="size-4" /> MediUX or Kometa YAML
+          </div>
+          <p className="mt-1 text-xs text-muted">
+            On a MediUX set, copy its <em>Kometa YAML</em> and paste it here (or any Kometa metadata with <code>url_poster</code> /{" "}
+            <code>url_background</code>). Posters, season posters, episode title cards and backgrounds are all imported.
+          </p>
+          <textarea
+            className={inputClass + " mt-3 h-28 py-2 font-mono text-xs"}
+            value={yamlText}
+            onChange={(e) => setYamlText(e.target.value)}
+            placeholder={"metadata:\n  4638:\n    url_poster: https://api.mediux.pro/assets/…"}
+          />
+          <Button className="mt-2" loading={fromYaml.isPending} disabled={!yamlText.trim()} onClick={() => fromYaml.mutate()}>
+            Import
+          </Button>
+        </div>
+      </div>
       <div className="mt-3 space-y-2">
-        <ErrorNote error={error ?? fromFolder.error} />
+        <ErrorNote error={error ?? fromFolder.error ?? fromYaml.error} />
         {latest && <SetResult job={latest} />}
       </div>
     </Card>
@@ -143,21 +173,23 @@ function SetResult({ job }: { job: Job }) {
     return <div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">Import failed: {job.error}</div>;
   }
   const r = job.result ?? {};
-  const unmatched = (r.unmatched_files as string[] | undefined) ?? [];
+  const unmatched = (r.unmatched_files as string[] | undefined) ?? (r.unmatched_entries as string[] | undefined) ?? [];
   return (
     <div className="rounded-md border border-ok/30 bg-ok/10 px-3 py-2 text-sm">
       <div className="flex items-center gap-2 font-medium text-ok">
-        <CheckCircle2 className="size-4" /> Imported {r.imported ?? 0} posters · {formatDate(job.finished_at)}
+        <CheckCircle2 className="size-4" /> Imported {r.imported ?? 0} {job.kind === "url_artwork" ? "images" : "posters"} ·{" "}
+        {formatDate(job.finished_at)}
       </div>
       <div className="mt-1 text-muted">
-        Used as the base for {r.applied ?? 0}
+        Used as the base for {r.applied ?? r.imported ?? 0}
         {r.kept_choice ? `; kept your own choice for ${r.kept_choice}` : ""}.
         {r.unreadable ? ` ${r.unreadable} unreadable.` : ""}
         {r.skipped ? ` ${r.skipped} other files ignored.` : ""}
+        {r.failed ? ` ${r.failed} couldn't be downloaded or read (see Activity).` : ""}
       </div>
       {unmatched.length > 0 && (
         <details className="mt-1">
-          <summary className="cursor-pointer text-warn">{unmatched.length} file{unmatched.length === 1 ? "" : "s"} didn't match anything in your library</summary>
+          <summary className="cursor-pointer text-warn">{unmatched.length} {job.kind === "url_artwork" ? (unmatched.length === 1 ? "entry" : "entries") : unmatched.length === 1 ? "file" : "files"} didn't match anything in your library</summary>
           <ul className="mt-1 max-h-48 overflow-y-auto text-xs text-muted">
             {unmatched.map((name) => (
               <li key={name}>{name}</li>
