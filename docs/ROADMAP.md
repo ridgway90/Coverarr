@@ -51,12 +51,13 @@ Plex, Jellyfin and Emby, doing only the work that a change actually requires.
 - [x] Collection posters with overrides (TMDb's poster for new TMDb collections); created
   everywhere automatically
 - [x] Labels on collections and their titles (Kometa's `label` / `item_label`)
-- IMDb charts (no API)
+- [x] IMDb charts, lists and titles (read from IMDb's pages, as there's no API)
 
 ## Later / nice to have
 
 - [x] Episode title cards (text layers: episode number and title, with any font)
 - [x] Backgrounds (fanart) as managed artwork: chosen per title, pushed everywhere
 - [x] Metadata edits (titles, sort titles, summaries, labels), pushed to every server
-- MediUX / ThePosterDB set import
+- [x] MediUX sets via their Kometa YAML (posters, seasons, episode cards, backgrounds).
+  ThePosterDB's terms forbid scraping, so its sets stay a manual download + zip import.
 - Import an existing Kometa config

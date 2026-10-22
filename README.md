@@ -38,6 +38,11 @@ possible: it tracks what each server already has and only touches what actually 
   such as a set you've downloaded from ThePosterDB: `Hot Fuzz (2007).jpg`,
   `Cornetto Collection.jpg`, `Spaced (1999) - Season 1.jpg`. ThePosterDB has no API and its
   terms forbid automated downloads, so download the set yourself and import the zip.
+  **MediUX** sets (and any Kometa metadata with image links) can be imported by pasting their
+  *Kometa YAML*: `url_poster` and `url_background` keyed by TMDb/TVDb id or "Title (Year)",
+  with `seasons` and their `episodes`. Posters, season posters, episode title cards and
+  backgrounds are downloaded (over https, from MediUX, TMDb, GitHub, Imgur or a ThePosterDB
+  poster link you give it) and become the bases, ready to push.
   On a film, show or collection page, **Upload poster set** imports a zip for just that title:
   a show's poster and its seasons (files may be named just `Season 1.jpg` or `Specials.jpg`),
   or a collection's poster and its films. A single file named some other way
@@ -70,7 +75,7 @@ possible: it tracks what each server already has and only touches what actually 
   *Run the scan now* runs one straight away.
 - **List collections** (sidebar → List collections): collections built from lists, made in
   Coverarr or imported from Kometa's YAML. Sources, merged when there are several:
-  - TMDb lists, TMDb collections, single TMDb films/shows, and Trakt lists
+  - TMDb lists, TMDb collections, single TMDb films/shows, Trakt lists, IMDb lists and titles
   - charts: TMDb popular, top rated, trending (day/week), now playing, upcoming, airing today,
     on the air; Trakt trending, popular, anticipated, most watched this week, box office. You
     choose how many titles, e.g. the top 20.
@@ -82,13 +87,17 @@ possible: it tracks what each server already has and only touches what actually 
   on its titles* on every film or show in it, as Kometa's `label` and `item_label` do; useful
   for Plex sharing restrictions and smart filters. A label you take off the collection comes
   off the servers on the next sync, and a title that leaves the collection loses its item
-  labels; labels you set yourself on the servers are left alone. *Sync* creates the collection on every server that's missing it and
-  adds the titles you have; a new collection from a TMDb collection gets TMDb's poster.
+  labels; labels you set yourself on the servers are left alone. *Sync* creates the
+  collection on every server that's missing it and adds the titles you have; a new collection
+  from a TMDb collection gets TMDb's poster.
   Collections switched to *Keep in sync* sync daily (Settings → Automation) and in the weekly
   scan. Collections imported from Kometa start switched off, so nothing changes until you
   choose to take them over. Kometa files can use the chart builders too
-  (e.g. `tmdb_popular: 30`). There's no IMDb chart: IMDb has no API (TMDb top rated or a
-  Trakt list are good stand-ins).
+  (e.g. `tmdb_popular: 30`). IMDb works too: the charts
+  (Top 250 films and shows, most popular, top English-language, box office, lowest rated),
+  public IMDb lists and single titles (`imdb_chart`, `imdb_list`, `imdb_id`). IMDb has no
+  API, so Coverarr reads its pages as a browser would; if IMDb holds a request back, the sync
+  reports it and leaves the collection as it is.
 - **Trakt** (Settings → General): the client ID of your Trakt app is enough for public lists
   and charts. To use private lists, *Connect Trakt* signs in with OAuth PKCE, so no client
   secret is needed. Set the app's redirect URI to the one shown (Coverarr's

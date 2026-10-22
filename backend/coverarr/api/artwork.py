@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.api.kometa import _save_upload
@@ -23,6 +23,8 @@ from coverarr.services.artwork import (
     save_artwork,
     tmdb_posters,
 )
+from coverarr.services.kometa_yaml import KometaYamlError
+from coverarr.services.set_links import parse_artwork_yaml
 
 router = APIRouter(prefix="/api", tags=["artwork"])
 
@@ -176,6 +178,29 @@ async def import_poster_set_folder(body: SetFolder, request: Request):
         },
     )
     return {"job_id": job.id}
+
+
+class SetYaml(BaseModel):
+    yaml: str = Field(min_length=1, max_length=2_000_000)
+    keep_choices: bool = False
+
+
+@router.post("/poster-sets/yaml")
+async def import_poster_set_yaml(body: SetYaml, request: Request):
+    """Kometa-style YAML with url_poster / url_background (e.g. MediUX's Kometa YAML)."""
+    try:
+        images = await asyncio.to_thread(parse_artwork_yaml, body.yaml)
+    except KometaYamlError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    job = await request.app.state.jobs.enqueue(
+        "url_artwork",
+        {
+            "yaml": body.yaml,
+            "config_dir": str(_config_dir(request)),
+            "keep_choices": body.keep_choices,
+        },
+    )
+    return {"job_id": job.id, "images": len(images)}
 
 
 class TmdbReset(BaseModel):
