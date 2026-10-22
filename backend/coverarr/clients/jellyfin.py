@@ -395,6 +395,33 @@ class JellyfinClient(MediaServerClient):
         row = await self._json("GET", f"/Users/{uid}/Items/{item_id}")
         return (row.get("ImageTags") or {}).get("Primary")
 
+    async def edit_metadata(
+        self,
+        library_remote_id: str | None,
+        item_id: str,
+        kind: str,
+        *,
+        title: str | None = None,
+        sort_title: str | None = None,
+        summary: str | None = None,
+    ) -> None:
+        if title is None and sort_title is None and summary is None:
+            return
+        uid = await self.user_id()
+        item = await self._json("GET", f"/Users/{uid}/Items/{item_id}")
+        locked = list(item.get("LockedFields") or [])
+        if title is not None:
+            item["Name"] = title
+            locked += [] if "Name" in locked else ["Name"]
+        if sort_title is not None:
+            # A forced sort name stays put by itself ("SortName" isn't lockable).
+            item["SortName"] = item["ForcedSortName"] = sort_title
+        if summary is not None:
+            item["Overview"] = summary
+            locked += [] if "Overview" in locked else ["Overview"]
+        item["LockedFields"] = locked
+        await self._request("POST", f"/Items/{item_id}", json=item)
+
     async def edit_labels(
         self,
         library_remote_id: str | None,

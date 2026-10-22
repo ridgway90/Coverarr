@@ -592,10 +592,14 @@ async def _artworks(session: AsyncSession, owner_filter: Any) -> dict[int, Any]:
 
 async def changes_summary(session: AsyncSession) -> dict[str, int]:
     from coverarr.services.backgrounds import background_changes
+    from coverarr.services.metadata import metadata_changes
 
     changes = await pending_changes(session)
     backgrounds = await background_changes(session)
+    metadata = await metadata_changes(session)
     return {
+        "metadata": len(metadata),
+        "metadata_uploads": sum(len(c.servers) for c in metadata),
         "backgrounds": sum(1 for c in backgrounds if not c.problem),
         "background_uploads": sum(len(c.servers) for c in backgrounds if not c.problem),
         "titles": sum(1 for c in changes if c.target == "item" and not c.problem),
@@ -681,6 +685,14 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
                 await background_changes(session, media_item_ids=item_ids) if item_ids else []
             )
         bg_changes = [c for c in bg_changes if not c.problem]
+        from coverarr.services.metadata import metadata_changes, push_metadata
+
+        if item_ids is None and coll_ids is None:
+            meta_changes = await metadata_changes(session, library_id=library_id)
+        else:
+            meta_changes = (
+                await metadata_changes(session, media_item_ids=item_ids) if item_ids else []
+            )
         servers = {s.id: s for s in await session.scalars(select(Server))}
         profile = await load_profile(session)
 
@@ -843,6 +855,12 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
         finally:
             await asyncio.shield(record())
 
+        if meta_changes:
+            await ctx.log(f"{len(meta_changes)} titles' metadata to push")
+            names = {sid: s.name for sid, s in servers.items()}
+            for key, value in (await push_metadata(ctx, meta_changes, clients, names)).items():
+                counts[key] += value
+
         if bg_changes:
             await ctx.log(
                 f"{len(bg_changes)} backgrounds to push "
@@ -870,6 +888,8 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
             else ""
         )
         + (f" ({counts['backgrounds_failed']} failed)" if counts["backgrounds_failed"] else "")
+        + (f"; metadata on {counts['metadata']} servers' titles" if counts["metadata"] else "")
+        + (f" ({counts['metadata_failed']} failed)" if counts["metadata_failed"] else "")
     )
     return {"titles": len(changes), **counts}
 

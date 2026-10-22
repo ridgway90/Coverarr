@@ -366,6 +366,30 @@ class PlexClient(MediaServerClient):
         resp = await self._request("GET", path, headers={"Accept": "image/*"})
         return resp.content
 
+    async def edit_metadata(
+        self,
+        library_remote_id: str | None,
+        item_id: str,
+        kind: str,
+        *,
+        title: str | None = None,
+        sort_title: str | None = None,
+        summary: str | None = None,
+    ) -> None:
+        fields: dict[str, Any] = {}
+        for name, value in (("title", title), ("titleSort", sort_title), ("summary", summary)):
+            if value is not None:
+                fields.update({f"{name}.value": value, f"{name}.locked": 1})
+        if not fields:
+            return
+        if not library_remote_id:
+            raise MediaServerError("plex: no library section to edit in")
+        await self._request(
+            "PUT",
+            f"/library/sections/{library_remote_id}/all",
+            params={"type": EDIT_TYPES[kind], "id": item_id, **fields},
+        )
+
     async def edit_labels(
         self,
         library_remote_id: str | None,

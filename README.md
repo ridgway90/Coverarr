@@ -140,6 +140,11 @@ possible: it tracks what each server already has and only touches what actually 
     *Add several images* guesses each file's slot from its name ("4K Dolby Vision.png") for
     you to check. Empty slots borrow a simpler badge (4K DV + HDR falls back to 4K DV, then
     4K). The SD badges cover 576p and 480p.
+- **Details** (a film or show → Details): set the title, sort title, summary and labels once
+  and *Changes* pushes them to every server, locked there so a metadata refresh doesn't undo
+  them. Blank fields aren't managed (each server keeps its own). A server whose title, sort
+  title or labels drift from them (seen on the next import) is listed again; labels you remove
+  come off the servers, ones set there by hand stay.
 - **Backgrounds** (a film or show → Backgrounds): the background (fanart) each server shows,
   side by side. Pick one server's, upload your own or take one from TMDb (textless first), and
   *Changes* pushes it to every other server (Plex's art, Jellyfin/Emby's first backdrop).

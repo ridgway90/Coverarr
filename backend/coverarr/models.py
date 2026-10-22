@@ -151,6 +151,9 @@ class MediaItem(Base):
     poster_source: Mapped[str | None] = mapped_column(String(100))
     # The background (fanart) every server should show: "server:<id>" or "background:<id>".
     background_source: Mapped[str | None] = mapped_column(String(100))
+    # Title, sort title, summary and labels you set in Coverarr, pushed to every server
+    # (a field that's missing is left as each server has it).
+    metadata_edits: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     # Resolution / HDR / DV / edition / network merged from every server (services/mediainfo).
     facts: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
@@ -203,6 +206,9 @@ class ServerItem(Base):
     background_ref: Mapped[str | None] = mapped_column(String(500))
     background_pushed_ref: Mapped[str | None] = mapped_column(String(500))
     background_pushed_key: Mapped[str | None] = mapped_column(String(100))
+    # The metadata edits last pushed here (a hash of them), and their labels.
+    metadata_pushed_key: Mapped[str | None] = mapped_column(String(64))
+    metadata_pushed_labels: Mapped[list[str] | None] = mapped_column(JSON)
     # 16x24 greyscale thumbnail (hex) for telling overlays apart (services/posters.py).
     poster_edges: Mapped[str | None] = mapped_column(String(800))
     # Resolution / HDR / DV / edition / network as this server reports them (for overlays).

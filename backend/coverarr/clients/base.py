@@ -238,6 +238,20 @@ class MediaServerClient(ABC):
         """
 
     @abstractmethod
+    async def edit_metadata(
+        self,
+        library_remote_id: str | None,
+        item_id: str,
+        kind: str,
+        *,
+        title: str | None = None,
+        sort_title: str | None = None,
+        summary: str | None = None,
+    ) -> None:
+        """Set (and lock) a film's or show's title, sort title and summary; None leaves one
+        as it is."""
+
+    @abstractmethod
     async def edit_labels(
         self,
         library_remote_id: str | None,

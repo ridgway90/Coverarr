@@ -73,6 +73,8 @@ async def test_push_server_poster(app, authed, fake_servers):
         "problems": 0,
         "backgrounds": 0,
         "background_uploads": 0,
+        "metadata": 0,
+        "metadata_uploads": 0,
     }
     # The library filters still find it, though it's no longer a review issue.
     assert await _titles(client, films["id"], "push") == ["Arrival"]
