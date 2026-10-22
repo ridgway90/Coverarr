@@ -150,7 +150,7 @@ export interface RenderedPoster {
 
 export type PosterRef = Presence | Artwork | RenderedPoster;
 
-export type LayerType = "image" | "resolution" | "edition" | "network";
+export type LayerType = "image" | "resolution" | "edition" | "network" | "text";
 
 export interface OverlayLayer {
   type: LayerType;
@@ -162,6 +162,13 @@ export interface OverlayLayer {
   h_offset?: number;
   v_offset?: number;
   scale?: number;
+  // text layers
+  template?: string;
+  font?: string | null;
+  size?: number;
+  color?: string;
+  stroke_width?: number;
+  stroke_color?: string;
 }
 
 export interface OverlayLibrary {
@@ -175,6 +182,7 @@ export interface OverlayLibrary {
 export interface OverlayPack {
   name: string;
   images: number;
+  fonts: string[];
   top_files: string[];
   folders: Record<string, number>;
 }

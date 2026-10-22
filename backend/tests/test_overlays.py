@@ -227,3 +227,68 @@ async def test_tv_levels(app, authed, fake_servers):
     result = await _push(app, client)
     assert result.get("failed", 0) == 0 and result["rendered"] == len(items)
     assert (await _changes(client))["total"] == 0
+
+
+def test_text_templates():
+    from coverarr.services.overlays import OverlayError, clean_layers, fill_template
+
+    info = {"title": "Art", "show": "Spaced", "season": 1, "episode": 3, "year": 1999}
+    assert fill_template("S{season:02}E{episode:02}  {title}", info) == "S01E03  Art"
+    assert fill_template("{show} ({year})", info) == "Spaced (1999)"
+    assert fill_template("{title} {nope}", info) == "Art {nope}"
+    assert fill_template("{episode}", {}) == ""  # nothing to draw
+    layer = clean_layers([{"type": "text", "template": "{title}", "color": "#ff0000"}])[0]
+    assert layer["color"] == "#FF0000" and layer["size"] == 60 and layer["font"] is None
+    for bad in (
+        {"template": ""},
+        {"template": "x", "font": "a.png"},
+        {"template": "x", "color": "red"},
+    ):
+        try:
+            clean_layers([{"type": "text", **bad}])
+        except OverlayError:
+            continue
+        raise AssertionError(bad)
+
+
+async def test_title_cards(app, authed, fake_servers):
+    """A text layer on episodes draws each episode's own number and title."""
+    client = authed
+    ids, films, tv = await _setup(app, client)
+    await client.post(
+        "/api/overlays/pack", files={"file": ("jmxd.zip", _pack(), "application/zip")}
+    )
+    levels = tv["levels"]
+    card = next(layer for layer in levels["episode"] if layer["type"] == "text")
+    assert card["enabled"] is False  # off until switched on
+    levels["episode"] = [
+        dict(card, enabled=True, template="{title}", color="#FF0000", size=120, stroke_width=0)
+    ]
+    levels["show"] = levels["season"] = []
+    resp = await client.put(
+        f"/api/overlays/libraries/{tv['id']}", json={"enabled": True, "levels": levels}
+    )
+    assert resp.status_code == 200, resp.text
+    items = (await _changes(client))["items"]
+    episodes = [c for c in items if c["kind"] == "episode"]
+    assert episodes and all(c["kind"] == "episode" for c in items)
+    # Every episode has its own render (its own title), not one shared plan.
+    assert len({c["base"]["url"] for c in episodes}) == len(episodes)
+
+    live = await client.post(
+        "/api/overlays/preview",
+        json={"media_item_id": episodes[0]["id"], "layers": levels["episode"], "width": 1200},
+    )
+    img = Image.open(io.BytesIO(live.content)).convert("RGB").resize((1920, 1080))
+    # Red text bottom-left, nothing top-right.
+    red = [
+        img.getpixel((x, y))
+        for x in range(60, 700, 4)
+        for y in range(1080 - 60 - 120, 1080 - 60, 4)
+    ]
+    assert any(r > 200 and g < 80 and b < 80 for r, g, b in red)
+    r, g, b = img.getpixel((1900, 20))
+    assert not (r > 200 and g < 80 and b < 80)
+
+    result = await _push(app, client)
+    assert result.get("failed", 0) == 0 and result["rendered"] == len(episodes)

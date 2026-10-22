@@ -281,8 +281,9 @@ def _assess_overlay(
     setup: OverlaySetup,
     kinds: dict[int, str],
     force: bool = False,
+    info: dict[str, Any] | None = None,
 ) -> None:
-    """Like ``_assess``, for a title that gets overlays."""
+    """Like ``_assess``, for a title that gets overlays (``info`` fills any text layers)."""
     kind, _, ref = change.source.partition(":") if change.source else ("", "", "")
     if not kind:
         # Every server may show Coverarr's render (e.g. after a Discard); the clean poster
@@ -324,7 +325,7 @@ def _assess_overlay(
             return
         change.base = _row_poster(src, "server_item_id")
         base = f"server:{src.id}:{src.poster_ref}"
-    plan = setup.plan(change.kind, layers, facts)
+    plan = setup.plan(change.kind, layers, facts, info)
     change.render = Render(change.kind, base, plan, plan.key(base))
     wanted = change.render.pushed_key
     for row in rows:
@@ -362,8 +363,11 @@ ITEM_INFO = (
 )
 
 
-async def _labels_for(session: AsyncSession, items: list[Any]) -> dict[int, tuple]:
-    """Readable titles for seasons/episodes ("Spaced S01E02") plus their top-level show id."""
+async def _labels_for(
+    session: AsyncSession, items: list[Any], info: dict[int, dict[str, Any]] | None = None
+) -> dict[int, tuple]:
+    """Readable titles for seasons/episodes ("Spaced S01E02") plus their top-level show id.
+    ``info`` is filled with what overlay text can show for each (title, show, season…)."""
     parents: dict[int, Any] = {}
     want = {i.parent_id for i in items if i.parent_id}
     while want:
@@ -396,6 +400,17 @@ async def _labels_for(session: AsyncSession, items: list[Any]) -> dict[int, tupl
         else:
             title = f"{item.title} ({item.year})" if item.year else item.title
         out[item.id] = (title, top.id)
+        if info is not None:
+            season = parents.get(item.parent_id) if item.kind == "episode" else None
+            info[item.id] = {
+                "title": item.title,
+                "show": top.title,
+                "season": item.season_number
+                if item.season_number is not None
+                else (season.season_number if season else None),
+                "episode": item.episode_number,
+                "year": item.year or top.year,
+            }
     return out
 
 
@@ -439,7 +454,8 @@ async def compute_changes(
             ):
                 rows[r.media_item_id].append(r)
             arts = await _artworks(session, Artwork.media_item_id.in_(chosen))
-            labels = await _labels_for(session, targets)
+            info: dict[int, dict[str, Any]] = {}
+            labels = await _labels_for(session, targets, info)
             for n, t in enumerate(targets):
                 if n % 2000 == 1999:
                     await asyncio.sleep(0)  # let the API answer during a long pass
@@ -449,7 +465,9 @@ async def compute_changes(
                 )
                 layers = setup.layers_for(t.library_id, t.kind)
                 if layers is not None:
-                    _assess_overlay(change, rows[t.id], arts, t.facts, layers, setup, kinds, force)
+                    _assess_overlay(
+                        change, rows[t.id], arts, t.facts, layers, setup, kinds, force, info[t.id]
+                    )
                 else:
                     _assess(change, rows[t.id], arts, threshold, force)
                 if change.servers or change.problem:
@@ -852,7 +870,8 @@ async def plan_item(
         )
     ).all()
     arts = await _artworks(session, Artwork.media_item_id == t.id)
-    title, top = (await _labels_for(session, [t]))[t.id]
+    info: dict[int, dict[str, Any]] = {}
+    title, top = (await _labels_for(session, [t], info))[t.id]
     change = Change("item", t.id, title, t.kind, t.library_id, t.poster_source or "", top, None)
-    _assess_overlay(change, rows, arts, t.facts, layers, setup, kinds)
+    _assess_overlay(change, rows, arts, t.facts, layers, setup, kinds, info=info[t.id])
     return change

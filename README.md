@@ -108,6 +108,11 @@ possible: it tracks what each server already has and only touches what actually 
   (4K / 1080p… with DV, HDR, HDR10+) top-left on films, shows, seasons and episodes (episodes use
   the episode gradients), the network logo bottom-left on shows, and an optional edition banner.
   Every layer can be switched off, moved or added, with a live preview on any title.
+  - **Text layers and title cards**: a text layer writes a line such as
+    `S{season:02}E{episode:02}  {title}` on each title, filled in with its own `{title}`,
+    `{show}`, `{season}`, `{episode}` and `{year}`, shrunk to fit the width. On episodes that
+    makes Kometa-style title cards (episodes have one ready to switch on). Pick the size,
+    colour and outline, and the built-in font or one uploaded into the pack (.ttf/.otf).
   - Resolution, HDR, Dolby Vision and edition come from Plex (and its HDR/DV filters), Jellyfin's
     picture size, and the Radarr/Sonarr file name (`[Bluray-2160p][DV HDR10]`,
     `{edition-Director's Cut}`). Seasons and shows show their best episode.
