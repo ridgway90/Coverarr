@@ -12,10 +12,17 @@ interface YamlResult {
   warnings: Record<string, string[]>;
   keys_imported: string[];
   unassigned: string[];
+  jobs: number[];
+  defaults: Record<string, { collections: number; unsupported: string[]; franchise: boolean }>;
+  overlays: Record<string, { applied: string[]; unsupported: string[]; kept_existing: boolean }>;
+  metadata_files: Record<string, string[]>;
+  asset_directories: string[];
+  unknown_libraries: string[];
 }
 
 const KEY_LABELS: Record<string, string> = {
   tmdb_api_key: "TMDb API key",
+  mdblist_api_key: "MDBList API key",
   trakt_client_id: "Trakt client ID",
   trakt_client_secret: "Trakt client secret",
   trakt_access_token: "Trakt access token",
@@ -217,8 +224,10 @@ function YamlSection() {
       <h2 className="text-lg font-semibold">Collection files</h2>
       <p className="mt-1 text-sm text-muted">
         Upload your Kometa collection YAML files (e.g. <code>comfort-j.yml</code>, <code>christmas.yml</code>). Include{" "}
-        <code>config.yml</code> to place each file in the right library and bring over your TMDb/Trakt keys. TMDb lists, TMDb
-        collections, Trakt lists and TMDb/Trakt charts are understood, with sort title, order, sync mode and summary.
+        <code>config.yml</code> to place each file in the right library, bring over your TMDb/Trakt/MDBList keys, and turn
+        Kometa's <code>- default:</code> collections and overlays into Coverarr ones. Templates, TMDb lists, collections,
+        charts and discover searches, Trakt and IMDb lists and charts, MDBList lists, AniList charts and{" "}
+        <code>plex_search</code> are understood, with sort title, order, sync mode and summary.
       </p>
       <div className="mt-4 flex flex-wrap items-end gap-4">
         <Field label="Library for files not listed in config.yml">
@@ -233,7 +242,7 @@ function YamlSection() {
         </Field>
         <label className="mb-2 flex items-center gap-2 text-sm">
           <input type="checkbox" checked={importKeys} onChange={(e) => setImportKeys(e.target.checked)} />
-          Import TMDb/Trakt keys from config.yml
+          Import TMDb/Trakt/MDBList keys from config.yml
         </label>
         <input
           ref={fileRef}
@@ -258,6 +267,7 @@ function YamlSection() {
             {result.unassigned.length > 0 && (
               <div className="text-warn">No library chosen for: {result.unassigned.join(", ")}. Pick one on the List collections page.</div>
             )}
+            <ConfigReport result={result} />
             {result.errors.map((e) => (
               <div key={e} className="text-danger">
                 {e}
@@ -273,6 +283,11 @@ function YamlSection() {
       </div>
 
       <p className="mt-4 text-sm">
+        Kometa metadata files (titles, sort titles, summaries, labels and <code>url_poster</code>/<code>url_background</code>)
+        go in under Poster sets → <em>Kometa YAML</em>, and an <code>asset_directory</code> (<code>Title (Year)/poster.jpg</code>,{" "}
+        <code>background.jpg</code>, <code>Season01.jpg</code>, <code>S01E01.jpg</code>) imports as a poster set.
+      </p>
+      <p className="mt-2 text-sm">
         Imported collections appear on the{" "}
         <Link to="/lists" className="text-accent hover:underline">
           List collections
@@ -280,5 +295,47 @@ function YamlSection() {
         page, switched off: check them there, then switch on <em>Keep in sync</em> for the ones Coverarr should take over from Kometa.
       </p>
     </Card>
+  );
+}
+
+function ConfigReport({ result }: { result: YamlResult }) {
+  const defaults = Object.entries(result.defaults ?? {});
+  const overlays = Object.entries(result.overlays ?? {});
+  const metadata = Object.entries(result.metadata_files ?? {});
+  return (
+    <>
+      {defaults.map(([lib, d]) => (
+        <div key={`d-${lib}`} className="text-muted">
+          {lib}: {d.collections} default collection{d.collections === 1 ? "" : "s"}
+          {d.franchise ? "; franchise collections are being looked up on TMDb (see Jobs)" : ""}
+          {d.unsupported.length > 0 && <span className="text-warn"> · not supported: {d.unsupported.join(", ")}</span>}
+        </div>
+      ))}
+      {overlays.map(([lib, o]) => (
+        <div key={`o-${lib}`} className="text-muted">
+          {lib} overlays:{" "}
+          {o.kept_existing
+            ? "kept the overlay settings you already have in Coverarr"
+            : o.applied.length
+              ? `turned on ${o.applied.join(", ")} (overlays stay off until you enable them on the Overlays page)`
+              : "nothing Coverarr can draw"}
+          {o.unsupported.length > 0 && <span className="text-warn"> · not supported: {o.unsupported.join(", ")}</span>}
+        </div>
+      ))}
+      {metadata.map(([lib, files]) => (
+        <div key={`m-${lib}`} className="text-muted">
+          {lib} metadata files: {files.join(", ")}. Import them under Poster sets → Kometa YAML.
+        </div>
+      ))}
+      {(result.asset_directories ?? []).length > 0 && (
+        <div className="text-muted">
+          Asset folder{result.asset_directories.length === 1 ? "" : "s"}: {result.asset_directories.join(", ")}. Copy into Coverarr's config
+          folder and import as a poster set.
+        </div>
+      )}
+      {(result.unknown_libraries ?? []).length > 0 && (
+        <div className="text-warn">No Coverarr library named: {result.unknown_libraries.join(", ")}.</div>
+      )}
+    </>
   );
 }

@@ -65,7 +65,7 @@ async def save_definitions(
 
     saved = []
     for p in parsed:
-        library_id = file_library.get(p.source_file, default_library_id)
+        library_id = p.library_id or file_library.get(p.source_file, default_library_id)
         definition = await session.scalar(
             select(CollectionDefinition).where(
                 CollectionDefinition.library_id == library_id,
@@ -124,7 +124,15 @@ async def resolve_definition(
     library = await session.get(Library, definition.library_id) if definition.library_id else None
     kind = library.kind if library is not None else "movie"
     resolved = Resolved()
+    library_hits: dict[str, int] = {}
     for builder in definition.builders or []:
+        if builder["type"] == "library_filter":
+            if library is not None:
+                for entry, item_id in await _library_matches(session, lists, library, builder):
+                    key = f"item:{item_id}"
+                    resolved.entries.setdefault(key, entry)
+                    library_hits[key] = item_id
+            continue
         try:
             for entry in await lists.resolve(builder, kind):
                 if entry.kind == kind:
@@ -134,6 +142,7 @@ async def resolve_definition(
                 resolved.errors.append(str(exc))
     if library is None:
         return resolved
+    resolved.in_library.update(library_hits)
     index = lists.library_index.get(library.id)
     if index is None:
         rows = (
@@ -158,6 +167,27 @@ async def resolve_definition(
                 resolved.in_library[key] = index[candidate]
                 break
     return resolved
+
+
+async def _library_matches(
+    session: AsyncSession, lists: ListClient, library: Library, builder: dict[str, Any]
+) -> list[tuple[ListEntry, int]]:
+    """The library's titles a library filter picks, by title."""
+    from coverarr.services.library_filter import matches, parse_filter
+
+    rows = lists.library_items.get(library.id)
+    if rows is None:
+        rows = lists.library_items[library.id] = (
+            await session.execute(
+                select(MediaItem.id, MediaItem.title, MediaItem.year, MediaItem.facts).where(
+                    MediaItem.library_id == library.id, MediaItem.kind == library.kind
+                )
+            )
+        ).all()
+    conditions = parse_filter(builder["value"])
+    picked = [r for r in rows if matches(conditions, r.year, r.facts)]
+    picked.sort(key=lambda r: (r.year or 9999, r.title.lower()))
+    return [(ListEntry(library.kind, r.title, r.year), r.id) for r in picked]
 
 
 async def _find_collection(
@@ -467,6 +497,7 @@ async def _lists(session: AsyncSession) -> ListClient:
         tmdb_key=await get_setting(session, "tmdb_api_key"),
         trakt_client_id=await get_setting(session, "trakt_client_id"),
         trakt_token=await trakt.access_token(session),
+        mdblist_key=await get_setting(session, "mdblist_api_key"),
     )
 
 

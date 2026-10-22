@@ -333,6 +333,7 @@ interface SettingsData {
   tmdb_api_key: { has_value: boolean };
   trakt_client_id: string | null;
   trakt_client_secret: { has_value: boolean };
+  mdblist_api_key: { has_value: boolean };
   poster_match_threshold: number;
   server_load: "gentle" | "normal" | "fast";
 }
@@ -363,6 +364,9 @@ function GeneralTab() {
       </Field>
       <Field label="Trakt client ID" hint="From your app at trakt.tv/oauth/applications. Enough for public lists and charts; no client secret is needed.">
         <input className={inputClass} value={val("trakt_client_id", data.trakt_client_id ?? "")} onChange={(e) => set("trakt_client_id", e.target.value)} />
+      </Field>
+      <Field label="MDBList API key" hint={data.mdblist_api_key.has_value ? "Saved. Enter a new key to replace it." : "For MDBList lists; get one at mdblist.com/preferences."}>
+        <input className={inputClass} type="password" value={val("mdblist_api_key", "")} onChange={(e) => set("mdblist_api_key", e.target.value)} autoComplete="off" />
       </Field>
       <Field
         label="Server load"

@@ -60,4 +60,8 @@ Plex, Jellyfin and Emby, doing only the work that a change actually requires.
 - [x] Metadata edits (titles, sort titles, summaries, labels), pushed to every server
 - [x] MediUX sets via their Kometa YAML (posters, seasons, episode cards, backgrounds).
   ThePosterDB's terms forbid scraping, so its sets stay a manual download + zip import.
-- Import an existing Kometa config
+- [x] Import an existing Kometa config: templates, `plex_search`/`plex_all`, `- default:`
+  collections (charts, genre/decade/year/resolution/network/studio/content rating, franchise),
+  default overlays (resolution, network, episode info), metadata files, asset folders,
+  `tmdb_discover`, MDBList and AniList. Letterboxd's terms forbid scrapers and it has no
+  public API, so its lists aren't supported.

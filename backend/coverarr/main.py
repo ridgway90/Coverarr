@@ -42,6 +42,7 @@ from coverarr.services.housekeeping import run_store_bases, run_tidy_assets
 from coverarr.services.importer import run_import, run_rematch
 from coverarr.services.jobs import JobRunner
 from coverarr.services.kometa import run_kometa_originals
+from coverarr.services.kometa_defaults import run_kometa_franchises
 from coverarr.services.overlays import drop_old_render_folders, set_config_dir
 from coverarr.services.posters import ThumbnailCache, run_poster_scan
 from coverarr.services.refresh import (
@@ -80,6 +81,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
         runner.register("collection_rename", run_collection_rename)
         runner.register("kometa_originals", run_kometa_originals)
         runner.register("url_artwork", run_url_artwork)
+        runner.register("kometa_franchises", run_kometa_franchises)
         runner.register("refresh_item", run_refresh_item)
         runner.register("refresh_collection", run_refresh_collection)
         runner.register("collection_remove", run_collection_remove)

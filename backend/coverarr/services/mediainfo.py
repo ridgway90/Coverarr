@@ -137,6 +137,17 @@ def merge(server_media: list[dict[str, Any] | None], path: str | None) -> dict[s
         facts[key] = next((m[key] for m in sources if m.get(key)), None)
     for flag in ("hdr", "dv", "hdr10plus"):
         facts[flag] = any(m.get(flag) for m in sources)
+    # Library facts, only where a server has them (so older facts compare unchanged).
+    for key in ("studio", "content_rating"):
+        if value := next((m[key] for m in sources if m.get(key)), None):
+            facts[key] = value
+    genres: list[str] = []
+    for m in sources:
+        genres += [
+            g for g in m.get("genres") or [] if g.casefold() not in map(str.casefold, genres)
+        ]
+    if genres:
+        facts["genres"] = genres
     return facts
 
 

@@ -92,7 +92,40 @@ class UrlImage:
     episode: int | None = None
 
 
-def parse_artwork_yaml(text: str) -> list[UrlImage]:
+# Kometa metadata-file fields Coverarr manages (services/metadata.py).
+EDIT_FIELDS = {"title": "title", "sort_title": "sort_title", "summary": "summary"}
+LABEL_FIELDS = ("label", "label.sync", "labels")
+
+
+def _edits(body: dict[str, Any]) -> dict[str, Any]:
+    from coverarr.services.metadata import clean_edits
+
+    raw: dict[str, Any] = {k: body.get(f) for f, k in EDIT_FIELDS.items()}
+    for field in LABEL_FIELDS:
+        if body.get(field) is not None:
+            raw["labels"] = body[field]
+    return clean_edits(raw)
+
+
+def parse_metadata_edits(text: str) -> list[tuple[Any, dict[str, Any]]]:
+    """(key, edits) for each title in a Kometa metadata file that sets a title, sort title,
+    summary or labels."""
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    if isinstance(data.get("metadata"), dict):
+        data = data["metadata"]
+    out = []
+    for key, body in data.items():
+        if isinstance(body, dict) and (edits := _edits(body)):
+            out.append((key, edits))
+    return out
+
+
+def parse_artwork_yaml(text: str, allow_empty: bool = False) -> list[UrlImage]:
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
@@ -122,7 +155,7 @@ def parse_artwork_yaml(text: str) -> list[UrlImage]:
             for e_num, e_body in (episodes or {}).items() if isinstance(episodes, dict) else []:
                 if str(e_num).isdigit():
                     images(key, e_body, int(s_num), int(e_num))
-    if not out:
+    if not out and not allow_empty:
         raise KometaYamlError("Found no url_poster or url_background in it")
     return out
 
@@ -135,7 +168,8 @@ async def run_url_artwork(ctx: JobContext) -> dict[str, Any]:
 
     config_dir = Path(ctx.params["config_dir"])
     keep_choices = bool(ctx.params.get("keep_choices"))
-    wanted = parse_artwork_yaml(ctx.params["yaml"])
+    wanted = parse_artwork_yaml(ctx.params["yaml"], allow_empty=True)
+    meta_edits = parse_metadata_edits(ctx.params["yaml"])
     async with ctx.sessionmaker() as session:
         items = (
             await session.execute(
@@ -191,8 +225,23 @@ async def run_url_artwork(ctx: JobContext) -> dict[str, Any]:
                 out.append(ep)
         return out
 
-    counts = {"imported": 0, "kept_choice": 0, "unmatched": 0, "failed": 0}
+    counts = {"imported": 0, "kept_choice": 0, "unmatched": 0, "failed": 0, "edited": 0}
     unmatched: list[str] = []
+    if meta_edits:
+        # Title / sort title / summary / labels: merged over what's set in Coverarr already,
+        # and pushed with the other pending changes.
+        async with ctx.sessionmaker() as session:
+            for key, edits in meta_edits:
+                targets = owners(UrlImage(key, "edit", ""))
+                if not targets:
+                    counts["unmatched"] += 1
+                    unmatched.append(str(key))
+                for target_id in targets:
+                    item = await session.get(MediaItem, target_id)
+                    if item is not None:
+                        item.metadata_edits = {**(item.metadata_edits or {}), **edits}
+                        counts["edited"] += 1
+            await session.commit()
     cache: dict[str, bytes | None] = {}
     async with _client() as http:
         for n, image in enumerate(wanted, 1):
@@ -257,7 +306,9 @@ async def run_url_artwork(ctx: JobContext) -> dict[str, Any]:
             await refresh_issues(session)
             await session.commit()
     await ctx.log(
-        f"Imported {counts['imported']} images; {counts['unmatched']} entries matched nothing"
+        f"Imported {counts['imported']} images"
+        + (f", edited {counts['edited']} titles" if counts["edited"] else "")
+        + f"; {counts['unmatched']} entries matched nothing"
         + (f"; {counts['failed']} failed" if counts["failed"] else "")
     )
     if unmatched:

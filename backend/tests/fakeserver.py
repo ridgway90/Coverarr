@@ -116,6 +116,8 @@ class Item:
     sort_title: str | None = None
     summary: str | None = None
     locked: list[str] = field(default_factory=list)
+    genres: list[str] = field(default_factory=list)
+    studio: str | None = None
     art_seed: str | None = None
     art_version: int = 1
     overlay: bool = False
@@ -432,6 +434,10 @@ def plex_router(srv: FakeServer) -> APIRouter:
             out["Label"] = [{"tag": t} for t in item.labels]  # listings carry labels too
         if item.sort_title:
             out["titleSort"] = item.sort_title
+        if item.genres:
+            out["Genre"] = [{"tag": g} for g in item.genres]
+        if item.studio and item.kind == "movie":
+            out["studio"] = item.studio
         if item.year:
             out["year"] = item.year
         if item.kind in ("movie", "show"):
@@ -775,6 +781,10 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
             out["Tags"] = list(item.tags)
         if item.locked:
             out["LockedFields"] = list(item.locked)
+        if item.genres:
+            out["Genres"] = list(item.genres)
+        if item.studio and item.kind == "movie":
+            out["Studios"] = [{"Name": item.studio}]
         if item.kind in ("movie", "show"):
             out["BackdropImageTags"] = [tag(f"bg{item.bg_version}", item.id)]
         if item.year:

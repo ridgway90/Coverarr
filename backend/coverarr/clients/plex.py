@@ -79,6 +79,15 @@ def _media_facts(
         network = meta.get("network") or meta.get("studio")
         if network:
             facts["network"] = network
+    if kind in ("movie", "show"):
+        # For collections built from the library (genre, studio, content rating).
+        genres = _tags(meta, "Genre")
+        if genres:
+            facts["genres"] = genres
+        if meta.get("studio"):
+            facts["studio"] = meta["studio"]
+        if meta.get("contentRating"):
+            facts["content_rating"] = meta["contentRating"]
     return facts
 
 

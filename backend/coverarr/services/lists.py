@@ -1,5 +1,5 @@
-"""Fetching list sources (TMDb lists, collections and charts, Trakt lists and charts, IMDb
-charts and lists) as plain title entries.
+"""Fetching list sources (TMDb lists, collections, charts and discover searches, Trakt lists
+and charts, IMDb charts and lists, MDBList lists, AniList charts) as plain title entries.
 
 Builder names follow Kometa's, so collection files imported from Kometa keep working."""
 
@@ -10,6 +10,7 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import parse_qsl, urlencode
 
 import httpx
 
@@ -61,15 +62,45 @@ BROWSER_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 IMDB_MAX_PAGES = 10
-LIST_BUILDERS = ("tmdb_list", "tmdb_collection", "trakt_list", "imdb_list")
+MDBLIST_API = "https://api.mdblist.com"
+ANILIST_API = "https://graphql.anilist.co"
+# Kometa's AniDB/AniList -> TMDb/TVDb/IMDb mapping.
+ANIME_IDS = "https://raw.githubusercontent.com/Kometa-Team/Anime-IDs/master/anime_ids.json"
+ANILIST_CHARTS = {
+    "anilist_popular": "POPULARITY_DESC",
+    "anilist_trending": "TRENDING_DESC",
+    "anilist_top_rated": "SCORE_DESC",
+}
+DISCOVER_DEFAULT_LIMIT = 100
+LIST_BUILDERS = ("tmdb_list", "tmdb_collection", "trakt_list", "imdb_list", "mdblist_list")
 ID_BUILDERS = ("tmdb_movie", "tmdb_show", "imdb_id")
-BUILDERS = (*LIST_BUILDERS, *ID_BUILDERS, *TMDB_CHARTS, *TRAKT_CHARTS, "imdb_chart")
+# Titles picked from the library itself (services/library_filter.py).
+LIBRARY_BUILDERS = ("library_filter",)
+BUILDERS = (
+    *LIST_BUILDERS,
+    *ID_BUILDERS,
+    *TMDB_CHARTS,
+    *TRAKT_CHARTS,
+    "imdb_chart",
+    "tmdb_discover",
+    *ANILIST_CHARTS,
+    "anilist_id",
+    *LIBRARY_BUILDERS,
+)
 
 
 def default_sync_mode(builders: list[dict[str, Any]]) -> str:
     """Charts change every day, so a collection of only charts replaces its titles ("sync");
     anything else only adds ("append"), as in Kometa."""
-    charts = {*TMDB_CHARTS, *TRAKT_CHARTS, "imdb_chart"}
+    # Library filters too: a title that no longer matches leaves the collection.
+    charts = {
+        *TMDB_CHARTS,
+        *TRAKT_CHARTS,
+        "imdb_chart",
+        "tmdb_discover",
+        *ANILIST_CHARTS,
+        *LIBRARY_BUILDERS,
+    }
     if builders and all(b.get("type") in charts for b in builders):
         return "sync"
     return "append"
@@ -119,6 +150,13 @@ def normalize_builder(kind: str, value: Any) -> dict[str, str]:
     if kind == "trakt_list":
         trakt_list_path(str(value))
         return {"type": kind, "value": str(value).strip()}
+    if kind == "library_filter":
+        from coverarr.services.library_filter import FilterError, format_filter, parse_filter
+
+        try:
+            return {"type": kind, "value": format_filter(parse_filter(str(value)))}
+        except FilterError as exc:
+            raise ListError(str(exc)) from exc
     if kind == "imdb_chart":
         chart = str(value).strip().lower()
         if chart not in IMDB_CHARTS:
@@ -126,6 +164,16 @@ def normalize_builder(kind: str, value: Any) -> dict[str, str]:
         return {"type": kind, "value": chart}
     if kind == "imdb_list":
         return {"type": kind, "value": imdb_list_id(value)}
+    if kind == "mdblist_list":
+        return {"type": kind, "value": mdblist_path(value)}
+    if kind == "tmdb_discover":
+        return {"type": kind, "value": discover_query(value)}
+    if kind == "anilist_id":
+        if not str(value).strip().isdigit():
+            raise ListError(f"Not an AniList id: {value}")
+        return {"type": kind, "value": str(value).strip()}
+    if kind in ANILIST_CHARTS:
+        return {"type": kind, "value": str(chart_limit(value))}
     if kind == "imdb_id":
         if not (m := re.search(r"tt\d{5,10}", str(value))):
             raise ListError(f"Not an IMDb title id or URL: {value}")
@@ -143,6 +191,35 @@ def trakt_list_path(url: str) -> str:
     if m := re.search(r"trakt\.tv/lists/(\d+)", url):
         return f"lists/{m.group(1)}"
     raise ListError(f"Not a Trakt list URL: {url}")
+
+
+def mdblist_path(value: Any) -> str:
+    """``https://mdblist.com/lists/<user>/<list>`` -> ``<user>/<list>``."""
+    text = str(value).strip()
+    if m := re.search(r"mdblist\.com/lists/([^/?#\s]+/[^/?#\s]+)", text):
+        return m.group(1)
+    if re.fullmatch(r"[\w.-]+/[\w.-]+", text):
+        return text
+    raise ListError(f"Not an MDBList list URL: {text}")
+
+
+def discover_query(value: Any) -> str:
+    """Kometa's ``tmdb_discover`` mapping (``with_genres: 27``, ``sort_by: ...``, ``limit``) as
+    a query string, the form it's stored and edited in."""
+    if isinstance(value, dict):
+        pairs = [
+            (str(k), ",".join(map(str, v)) if isinstance(v, list) else str(v))
+            for k, v in value.items()
+            if v is not None
+        ]
+    else:
+        pairs = parse_qsl(str(value).strip().lstrip("?"), keep_blank_values=False)
+    if not pairs:
+        raise ListError("tmdb_discover needs at least one search option, e.g. with_genres=27")
+    for key, _ in pairs:
+        if not re.fullmatch(r"[a-z_.]+", key):
+            raise ListError(f"Not a TMDb discover option: {key!r}")
+    return urlencode(pairs, safe=",|.:")
 
 
 def imdb_list_id(value: Any) -> str:
@@ -224,8 +301,11 @@ class ListClient:
         tmdb_key: str | None,
         trakt_client_id: str | None,
         trakt_token: str | None = None,
+        mdblist_key: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
+        self.mdblist_key = mdblist_key
+        self._anime_ids: dict[str, dict[str, Any]] | None = None
         self.tmdb_key = tmdb_key
         self.trakt_client_id = trakt_client_id
         self.trakt_token = trakt_token
@@ -233,6 +313,8 @@ class ListClient:
         self.trakt_token_rejected = False
         # Library id -> {"tmdb:123": media item}, built once per job, not per collection.
         self.library_index: dict[int, dict[str, int]] = {}
+        # Library id -> its titles with year and facts, for library filters.
+        self.library_items: dict[int, list[Any]] = {}
         self._http = httpx.AsyncClient(
             timeout=30, headers={"User-Agent": USER_AGENT}, transport=transport
         )
@@ -464,6 +546,127 @@ class ListClient:
             raise ListError(f"IMDb list {list_id} is empty or couldn't be read")
         return entries
 
+    # --- TMDb discover, MDBList, AniList ----------------------------------------------------
+
+    async def tmdb_discover(self, query: str, kind: str) -> list[ListEntry]:
+        params = dict(parse_qsl(query))
+        try:
+            limit = max(1, min(int(params.pop("limit", DISCOVER_DEFAULT_LIMIT)), MAX_CHART_LIMIT))
+        except ValueError as exc:
+            raise ListError("tmdb_discover's limit must be a number") from exc
+        path = "/discover/tv" if kind == "show" else "/discover/movie"
+        entries: list[ListEntry] = []
+        page = 1
+        while len(entries) < limit and page <= MAX_PAGES:
+            data = await self.tmdb_json(path, **params, page=page)
+            for item in data.get("results") or []:
+                entries.append(
+                    ListEntry(
+                        kind=kind,
+                        title=item.get("title") or item.get("name") or "",
+                        year=_year(item.get("release_date") or item.get("first_air_date")),
+                        tmdb_id=str(item["id"]),
+                    )
+                )
+            if page >= int(data.get("total_pages") or 1):
+                break
+            page += 1
+        return entries[:limit]
+
+    async def mdblist_list(self, path: str) -> list[ListEntry]:
+        if not self.mdblist_key:
+            raise ListError("Add an MDBList API key in Settings → General")
+        data = (
+            await self._get(
+                f"{MDBLIST_API}/lists/{path}/items",
+                params={"apikey": self.mdblist_key, "limit": 1000},
+            )
+        ).json()
+        rows = data if isinstance(data, list) else [*data.get("movies", []), *data.get("shows", [])]
+        entries = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            kind = "show" if row.get("mediatype") in ("show", "tv") else "movie"
+            entries.append(
+                ListEntry(
+                    kind=kind,
+                    title=row.get("title") or "",
+                    year=row.get("release_year") or row.get("year"),
+                    tmdb_id=str(row["id"]) if row.get("id") else None,
+                    tvdb_id=str(row["tvdb_id"]) if row.get("tvdb_id") else None,
+                    imdb_id=row.get("imdb_id") or None,
+                )
+            )
+        return entries
+
+    async def _anime_mapping(self) -> dict[str, dict[str, Any]]:
+        """AniList id -> its row in Kometa's Anime-IDs mapping."""
+        if self._anime_ids is None:
+            data = (await self._get(ANIME_IDS)).json()
+            self._anime_ids = {
+                str(row["anilist_id"]): row
+                for row in (data.values() if isinstance(data, dict) else data)
+                if isinstance(row, dict) and row.get("anilist_id")
+            }
+        return self._anime_ids
+
+    async def _anilist(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        try:
+            resp = await self._http.post(ANILIST_API, json={"query": query, "variables": variables})
+        except httpx.HTTPError as exc:
+            raise ListError(f"AniList: {exc}") from exc
+        if resp.status_code >= 400:
+            raise ListError(f"AniList: HTTP {resp.status_code}")
+        return resp.json().get("data") or {}
+
+    async def _anilist_entries(self, media: list[dict[str, Any]], kind: str) -> list[ListEntry]:
+        mapping = await self._anime_mapping()
+        entries = []
+        for m in media:
+            is_movie = m.get("format") == "MOVIE"
+            if is_movie != (kind == "movie"):
+                continue
+            ids = mapping.get(str(m.get("id"))) or {}
+            title = m.get("title") or {}
+            entries.append(
+                ListEntry(
+                    kind=kind,
+                    title=title.get("english") or title.get("romaji") or "",
+                    year=(m.get("startDate") or {}).get("year"),
+                    tmdb_id=str(ids.get("tmdb_movie_id" if is_movie else "tmdb_show_id") or "")
+                    or None,
+                    tvdb_id=str(ids["tvdb_id"]) if ids.get("tvdb_id") and not is_movie else None,
+                    imdb_id=ids.get("imdb_id") or None,
+                )
+            )
+        return entries
+
+    _ANILIST_FIELDS = "id format title { romaji english } startDate { year }"
+
+    async def anilist_chart(self, sort: str, kind: str, limit: int) -> list[ListEntry]:
+        query = (
+            "query ($page: Int, $sort: [MediaSort]) { Page(page: $page, perPage: 50) {"
+            " pageInfo { hasNextPage } media(type: ANIME, sort: $sort, isAdult: false) {"
+            f" {self._ANILIST_FIELDS} }} }} }}"
+        )
+        entries: list[ListEntry] = []
+        page = 1
+        while len(entries) < limit and page <= MAX_PAGES:
+            data = (await self._anilist(query, {"page": page, "sort": [sort]})).get("Page") or {}
+            entries += await self._anilist_entries(data.get("media") or [], kind)
+            if not (data.get("pageInfo") or {}).get("hasNextPage"):
+                break
+            page += 1
+        return entries[:limit]
+
+    async def anilist_title(self, anilist_id: str, kind: str) -> list[ListEntry]:
+        query = f"query ($id: Int) {{ Media(id: $id, type: ANIME) {{ {self._ANILIST_FIELDS} }} }}"
+        media = (await self._anilist(query, {"id": int(anilist_id)})).get("Media")
+        if not media:
+            raise ListError(f"AniList has no anime {anilist_id}")
+        return await self._anilist_entries([media], kind)
+
     async def resolve(
         self, builder: dict[str, Any], library_kind: str = "movie"
     ) -> list[ListEntry]:
@@ -483,6 +686,16 @@ class ListClient:
             return imdb_titles(await self._imdb_page(f"{IMDB}/{path}/"), chart_kind)
         if kind == "imdb_list":
             return await self.imdb_list(imdb_list_id(value))
+        if kind == "mdblist_list":
+            return [
+                e for e in await self.mdblist_list(mdblist_path(value)) if e.kind == library_kind
+            ]
+        if kind == "tmdb_discover":
+            return await self.tmdb_discover(str(value), library_kind)
+        if kind in ANILIST_CHARTS:
+            return await self.anilist_chart(ANILIST_CHARTS[kind], library_kind, chart_limit(value))
+        if kind == "anilist_id":
+            return await self.anilist_title(str(value), library_kind)
         if kind == "imdb_id":
             return [ListEntry(library_kind, str(value), imdb_id=str(value))]
         if kind in ID_BUILDERS:
