@@ -154,3 +154,65 @@ def test_yaml_alias_bomb_is_refused_quickly():
 def test_renders_spread_over_many_folders(tmp_path):
     folders = {rendered_path(tmp_path, f"m{i}", "k").parent.name for i in range(1, 2000)}
     assert len(folders) == 256
+
+
+async def test_import_keeps_rows_when_a_listing_comes_back_short(
+    app, authed, fake_servers, monkeypatch
+):
+    from coverarr.clients.plex import PlexClient
+
+    ids = await add_servers(authed)
+    await run_job(app, authed, "import")
+    plex = fake_servers["plex"]
+    gone = next(i for i in plex.items.values() if i.kind == "movie")
+    del plex.items[gone.id]
+
+    async def count_rows():
+        async with session_factory()() as session:
+            return await session.scalar(
+                select(func.count())
+                .select_from(ServerItem)
+                .where(ServerItem.server_id == ids["plex"], ServerItem.remote_id == gone.id)
+            )
+
+    # The server said there was one more film than it listed: keep what wasn't seen.
+    real_items = PlexClient.items
+
+    async def short_items(self, library, kind):
+        async for page in real_items(self, library, kind):
+            yield page
+        if kind == "movie" and self.listed_total is not None:
+            self.listed_total += 1
+
+    monkeypatch.setattr(PlexClient, "items", short_items)
+    await run_job(app, authed, "import")
+    assert await count_rows() == 1
+
+    monkeypatch.setattr(PlexClient, "items", real_items)
+    await run_job(app, authed, "import")
+    assert await count_rows() == 0
+
+
+async def test_pending_changes_are_cached_until_something_changes(
+    app, authed, fake_servers, monkeypatch
+):
+    from coverarr.services import changes
+
+    await add_servers(authed)
+    await run_job(app, authed, "import")
+    calls = []
+    real = changes.compute_changes
+
+    async def counting(*args, **kwargs):
+        calls.append(kwargs)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(changes, "compute_changes", counting)
+    first = (await authed.get("/api/changes/summary")).json()
+    assert (await authed.get("/api/changes/summary")).json() == first
+    await authed.get("/api/changes")
+    assert len(calls) == 1
+    # Any write may change what's pending.
+    await authed.put("/api/settings", json={})
+    await authed.get("/api/changes/summary")
+    assert len(calls) == 2

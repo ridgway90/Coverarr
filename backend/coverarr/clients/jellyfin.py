@@ -106,9 +106,14 @@ class JellyfinClient(MediaServerClient):
                 )
         return libs
 
-    async def _paged(self, params: dict[str, Any]) -> AsyncIterator[list[dict[str, Any]]]:
+    async def _paged(
+        self, params: dict[str, Any], *, count: bool = False
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """Pages of rows; with ``count``, the server's total goes in ``listed_total``."""
         uid = await self.user_id()
         start = 0
+        if count:
+            self.listed_total = None
         while True:
             data = await self._json(
                 "GET",
@@ -119,8 +124,11 @@ class JellyfinClient(MediaServerClient):
             if rows:
                 yield rows
             total = to_int(data.get("TotalRecordCount"))
+            if count and start == 0:
+                self.listed_total = total
             start += len(rows)
-            if not rows or len(rows) < self.page_size or (total is not None and start >= total):
+            # A short page only ends the listing when the server gives no total.
+            if not rows or (start >= total if total is not None else len(rows) < self.page_size):
                 return
 
     async def items(
@@ -132,9 +140,12 @@ class JellyfinClient(MediaServerClient):
             "IncludeItemTypes": ITEM_TYPES[kind],
             "Fields": FIELDS,
             "EnableImageTypes": "Primary",
-            "SortBy": "SortName",
+            # Oldest first, so titles added during the listing land at the end rather than
+            # shifting the pages still to come.
+            "SortBy": "DateCreated,SortName",
+            "SortOrder": "Ascending",
         }
-        async for rows in self._paged(params):
+        async for rows in self._paged(params, count=True):
             yield [self._to_item(r, kind) for r in rows]
 
     def _to_item(self, row: dict[str, Any], kind: ItemKind) -> RemoteItem:

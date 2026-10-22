@@ -114,9 +114,12 @@ class PlexClient(MediaServerClient):
         return data.get("MediaContainer") or {}
 
     async def _paged(
-        self, path: str, params: dict[str, Any] | None = None
+        self, path: str, params: dict[str, Any] | None = None, *, count: bool = False
     ) -> AsyncIterator[list[dict[str, Any]]]:
+        """Pages of rows; with ``count``, the server's total goes in ``listed_total``."""
         start = 0
+        if count:
+            self.listed_total = None
         while True:
             page_params = {
                 **(params or {}),
@@ -128,8 +131,11 @@ class PlexClient(MediaServerClient):
             if rows:
                 yield rows
             total = to_int(container.get("totalSize"))
+            if count and start == 0:
+                self.listed_total = total
             start += len(rows)
-            if not rows or len(rows) < self.page_size or (total is not None and start >= total):
+            # A short page only ends the listing when the server gives no total.
+            if not rows or (start >= total if total is not None else len(rows) < self.page_size):
                 return
 
     async def server_info(self) -> ServerInfo:
@@ -233,7 +239,10 @@ class PlexClient(MediaServerClient):
             }
         async for rows in self._paged(
             f"/library/sections/{library.id}/all",
-            {"type": PLEX_TYPES[kind], "includeGuids": 1},
+            # Oldest first, so titles added during the listing land at the end rather than
+            # shifting the pages still to come.
+            {"type": PLEX_TYPES[kind], "includeGuids": 1, "sort": "addedAt:asc"},
+            count=True,
         ):
             yield [self._to_item(r, kind, overlay_ids, flags) for r in rows]
 

@@ -398,6 +398,12 @@ async def match_collections(session: AsyncSession, stats: MatchStats) -> None:
     coll_members: dict[int, set[int]] = defaultdict(set)
     coll_servers: dict[int, set[int]] = defaultdict(set)
     coll_names: dict[int, set[str]] = defaultdict(set)
+    # Indexes, so each server collection only scores the few that could fit it (same name,
+    # or sharing members) rather than every collection.
+    by_norm: dict[str, set[int]] = defaultdict(set)
+    for c in collections.values():
+        by_norm[c.normalized_name].add(c.id)
+    by_member: dict[int, set[int]] = defaultdict(set)
 
     def infer_library(sc: ServerCollection, members: list[tuple[int, int]]) -> int | None:
         if sc.server_library_id and sl_to_lib.get(sc.server_library_id):
@@ -422,9 +428,11 @@ async def match_collections(session: AsyncSession, stats: MatchStats) -> None:
         return value
 
     def best_match(sc: ServerCollection, lib_id: int | None, norm: str, members: set[int]):
+        shared = Counter(cid for m in members for cid in by_member.get(m, ()))
+        possible = set(by_norm.get(norm, ())) | {cid for cid, n in shared.items() if n >= 2}
         candidates = [
             c
-            for c in collections.values()
+            for c in (collections[cid] for cid in sorted(possible))
             # A server never has two copies of one collection: if it already has one here,
             # this must be a different collection (e.g. a franchise vs its "universe").
             if sc.server_id not in coll_servers[c.id] and (c.library_id == lib_id or lib_id is None)
@@ -461,11 +469,16 @@ async def match_collections(session: AsyncSession, stats: MatchStats) -> None:
             session.add(coll)
             await session.flush()
             collections[coll.id] = coll
+            by_norm[norm].add(coll.id)
             stats.created += 1
         if coll is not None:
             if not coll_servers[coll.id]:
                 # The first server's collection names the logical one.
+                by_norm[coll.normalized_name].discard(coll.id)
                 coll.name, coll.normalized_name = sc.name, norm
+                by_norm[norm].add(coll.id)
+            for m in member_ids - coll_members[coll.id]:
+                by_member[m].add(coll.id)
             coll_members[coll.id] |= member_ids
             coll_servers[coll.id].add(sc.server_id)
             coll_names[coll.id].add(sc.name.casefold())

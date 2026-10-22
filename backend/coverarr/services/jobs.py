@@ -165,8 +165,11 @@ class JobRunner:
                 return
             kind, params = job.kind, dict(job.params or {})
 
+        from coverarr.services import changes
+
         ctx = JobContext(job_id, params, self.sessionmaker)
         self.live[job_id] = ctx
+        changes.job_started()
         status, result, error = "succeeded", None, None
         try:
             handler = self.handlers.get(kind)
@@ -193,6 +196,7 @@ class JobRunner:
         try:
             await self._finish(job_id, ctx, status, result, error)
         finally:
+            changes.job_finished()
             self.live.pop(job_id, None)
             self._running = None
             self._cancelling.discard(job_id)
