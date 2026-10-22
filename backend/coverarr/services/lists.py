@@ -6,9 +6,14 @@ Builder names follow Kometa's, so collection files imported from Kometa keep wor
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
+import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode
 
@@ -72,6 +77,22 @@ ANILIST_CHARTS = {
     "anilist_top_rated": "SCORE_DESC",
 }
 DISCOVER_DEFAULT_LIMIT = 100
+WIKIDATA_SPARQL = "https://query.wikidata.org/sparql"
+WIKIDATA_AGENT = f"{USER_AGENT} (https://github.com/ridgway90/Coverarr)"
+# Awards from Wikidata (CC0, with a public query service): a single award (winners of it) or,
+# with "class", any award of that ceremony.
+AWARDS: dict[str, tuple[str, str]] = {
+    "oscars_best_picture": ("award", "Q102427"),
+    "oscars": ("class", "Q19020"),
+    "bafta_best_film": ("award", "Q139184"),
+    "bafta": ("class", "Q732997"),
+    "golden_globe_best_drama": ("award", "Q1011509"),
+    "cannes_palme_dor": ("award", "Q179808"),
+    "berlinale_golden_bear": ("award", "Q154590"),
+    "venice_golden_lion": ("award", "Q209459"),
+    "emmys_best_drama": ("award", "Q989438"),
+    "razzie_worst_picture": ("award", "Q1780634"),
+}
 LIST_BUILDERS = ("tmdb_list", "tmdb_collection", "trakt_list", "imdb_list", "mdblist_list")
 ID_BUILDERS = ("tmdb_movie", "tmdb_show", "imdb_id")
 # Titles picked from the library itself (services/library_filter.py).
@@ -83,8 +104,10 @@ BUILDERS = (
     *TRAKT_CHARTS,
     "imdb_chart",
     "tmdb_discover",
+    "tmdb_keyword",
     *ANILIST_CHARTS,
     "anilist_id",
+    "wikidata_award",
     *LIBRARY_BUILDERS,
 )
 
@@ -168,6 +191,12 @@ def normalize_builder(kind: str, value: Any) -> dict[str, str]:
         return {"type": kind, "value": mdblist_path(value)}
     if kind == "tmdb_discover":
         return {"type": kind, "value": discover_query(value)}
+    if kind == "tmdb_keyword":
+        if not str(value).strip():
+            raise ListError("tmdb_keyword needs a keyword, e.g. christmas")
+        return {"type": kind, "value": str(value).strip().lower()}
+    if kind == "wikidata_award":
+        return {"type": kind, "value": award_value(value)}
     if kind == "anilist_id":
         if not str(value).strip().isdigit():
             raise ListError(f"Not an AniList id: {value}")
@@ -201,6 +230,92 @@ def mdblist_path(value: Any) -> str:
     if re.fullmatch(r"[\w.-]+/[\w.-]+", text):
         return text
     raise ListError(f"Not an MDBList list URL: {text}")
+
+
+def award_value(value: Any) -> str:
+    """``oscars_best_picture``, ``Q102427`` or either with ``:nominated``."""
+    text = str(value).strip()
+    award, _, which = text.partition(":")
+    if which not in ("", "nominated"):
+        raise ListError(f"Expected {award}:nominated, got {text!r}")
+    if award.lower() in AWARDS:
+        award = award.lower()
+    elif not re.fullmatch(r"Q\d+", award):
+        raise ListError(f"Unknown award {award!r}: use one of {', '.join(AWARDS)} or a Wikidata id")
+    return f"{award}:{which}" if which else award
+
+
+def award_query(value: str, kind: str) -> str:
+    """SPARQL for the films (or shows) that won, or were nominated for, an award."""
+    award, _, which = value.partition(":")
+    mode, qid = AWARDS.get(award, ("award", award))
+    prop = "P1411" if which == "nominated" else "P166"
+    award_of = "" if mode == "award" else f"?a wdt:P31 wd:{qid} . "
+    target = f"wd:{qid}" if mode == "award" else "?a"
+    # Films are instances of (a subclass of) film; shows of television series.
+    what = "wd:Q11424" if kind == "movie" else "wd:Q5398426"
+    return (
+        "SELECT DISTINCT ?imdb ?label (MIN(YEAR(?date)) AS ?year) WHERE { "
+        f"{award_of}?f wdt:{prop} {target} ; wdt:P345 ?imdb ; wdt:P31/wdt:P279* {what} . "
+        'FILTER(STRSTARTS(?imdb, "tt")) '
+        # Films have a publication date; series a start time.
+        "OPTIONAL { ?f wdt:P577|wdt:P580 ?date } "
+        'OPTIONAL { ?f rdfs:label ?label FILTER(LANG(?label) = "en") } '
+        "} GROUP BY ?imdb ?label"
+    )
+
+
+WIKIDATA_CACHE_DAYS = 7
+
+
+def _sparql_cache(query: str) -> Path | None:
+    from coverarr.services.overlays import config_dir
+
+    try:
+        root = config_dir()
+    except RuntimeError:
+        return None
+    return root / "cache" / "wikidata" / f"{hashlib.sha1(query.encode()).hexdigest()}.json"
+
+
+def sparql(query: str) -> dict[str, Any]:
+    """Run a Wikidata query, cached for a week (award lists rarely change, and the query
+    service rate-limits hard). If Wikidata refuses, an older cached answer is used."""
+    cache = _sparql_cache(query)
+    if cache is not None and cache.is_file():
+        age = time.time() - cache.stat().st_mtime
+        if age < WIKIDATA_CACHE_DAYS * 86400:
+            return json.loads(cache.read_text())
+    try:
+        data = _sparql_fetch(query)
+    except ListError:
+        if cache is not None and cache.is_file():
+            return json.loads(cache.read_text())
+        raise
+    if cache is not None:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(cache)
+    return data
+
+
+def _sparql_fetch(query: str) -> dict[str, Any]:
+    """Wikimedia's robot policy wants a User-Agent naming the project. It has also refused
+    httpx's requests that urllib's identical ones got through, so this uses urllib."""
+    url = f"{WIKIDATA_SPARQL}?{urlencode({'query': query, 'format': 'json'})}"
+    request = urllib.request.Request(
+        url, headers={"User-Agent": WIKIDATA_AGENT, "Accept": "application/sparql-results+json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            raise ListError("Wikidata is limiting requests just now; try again later") from exc
+        raise ListError(f"Wikidata: HTTP {exc.code}") from exc
+    except (OSError, ValueError) as exc:
+        raise ListError(f"Wikidata: {exc}") from exc
 
 
 def discover_query(value: Any) -> str:
@@ -573,6 +688,37 @@ class ListClient:
             page += 1
         return entries[:limit]
 
+    async def tmdb_keyword(self, keyword: str, kind: str, limit: int = 500) -> list[ListEntry]:
+        """Titles TMDb tags with a keyword (looked up by name), most popular first."""
+        found = await self.tmdb_json("/search/keyword", query=keyword)
+        wanted = keyword.casefold()
+        results = found.get("results") or []
+        ids = [str(r["id"]) for r in results if str(r.get("name")).casefold() == wanted]
+        # No exact match: the keywords that contain it ("christmas" -> "christmas eve"...).
+        ids = ids or [str(r["id"]) for r in results if wanted in str(r.get("name")).casefold()][:5]
+        if not ids:
+            raise ListError(f"TMDb has no keyword {keyword!r}")
+        query = urlencode(
+            {"with_keywords": "|".join(ids), "sort_by": "popularity.desc", "limit": limit}
+        )
+        return await self.tmdb_discover(query, kind)
+
+    async def wikidata_award(self, value: str, kind: str) -> list[ListEntry]:
+        data = await asyncio.to_thread(sparql, award_query(value, kind))
+        entries = []
+        for row in data.get("results", {}).get("bindings", []):
+            year = (row.get("year") or {}).get("value")
+            entries.append(
+                ListEntry(
+                    kind=kind,
+                    title=(row.get("label") or {}).get("value") or row["imdb"]["value"],
+                    year=int(year) if year and year.lstrip("-").isdigit() else None,
+                    imdb_id=row["imdb"]["value"],
+                )
+            )
+        entries.sort(key=lambda e: e.year or 0)
+        return entries
+
     async def mdblist_list(self, path: str) -> list[ListEntry]:
         if not self.mdblist_key:
             raise ListError("Add an MDBList API key in Settings → General")
@@ -692,6 +838,10 @@ class ListClient:
             ]
         if kind == "tmdb_discover":
             return await self.tmdb_discover(str(value), library_kind)
+        if kind == "tmdb_keyword":
+            return await self.tmdb_keyword(str(value), library_kind)
+        if kind == "wikidata_award":
+            return await self.wikidata_award(str(value), library_kind)
         if kind in ANILIST_CHARTS:
             return await self.anilist_chart(ANILIST_CHARTS[kind], library_kind, chart_limit(value))
         if kind == "anilist_id":

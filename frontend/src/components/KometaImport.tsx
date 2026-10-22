@@ -13,7 +13,7 @@ interface YamlResult {
   keys_imported: string[];
   unassigned: string[];
   jobs: number[];
-  defaults: Record<string, { collections: number; unsupported: string[]; franchise: boolean }>;
+  defaults: Record<string, { collections: number; unsupported: string[]; franchise: boolean; notes?: string[] }>;
   overlays: Record<string, { applied: string[]; unsupported: string[]; kept_existing: boolean }>;
   metadata_files: Record<string, string[]>;
   asset_directories: string[];
@@ -309,6 +309,11 @@ function ConfigReport({ result }: { result: YamlResult }) {
           {lib}: {d.collections} default collection{d.collections === 1 ? "" : "s"}
           {d.franchise ? "; franchise collections are being looked up on TMDb (see Jobs)" : ""}
           {d.unsupported.length > 0 && <span className="text-warn"> · not supported: {d.unsupported.join(", ")}</span>}
+          {(d.notes ?? []).map((n) => (
+            <div key={n} className="text-warn">
+              {n}
+            </div>
+          ))}
         </div>
       ))}
       {overlays.map(([lib, o]) => (

@@ -1,4 +1,5 @@
-"""What overlays need to know about a title: resolution, HDR / Dolby Vision, edition, network.
+"""What overlays need to know about a title: resolution, HDR / Dolby Vision, edition, network,
+audio codec.
 
 Each server row keeps what that server reported (``ServerItem.media``); the file name adds what
 Radarr/Sonarr wrote into it (``[Bluray-2160p][DV HDR10]``, ``{edition-Director's Cut}``).
@@ -31,6 +32,74 @@ _DV = re.compile(r"(?<![a-z0-9])(dv|dovi|dolby[ ._-]?vision)(?![a-z0-9])", re.IG
 _HDR10PLUS = re.compile(r"hdr10(\+|plus)", re.IGNORECASE)
 _HDR = re.compile(r"(?<![a-z0-9])(hdr(10)?|hlg|pq)(?![a-z0-9])", re.IGNORECASE)
 _EDITION_TAG = re.compile(r"\{edition-([^}]+)\}", re.IGNORECASE)
+
+
+def _w(pattern: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", re.IGNORECASE)
+
+
+_ATMOS = _w(r"atmos")
+_DDP = re.compile(r"(?<![a-z0-9])(ddp|eac3|e-ac-3|dd\+|ddplus)", re.IGNORECASE)
+# Audio codec key (Kometa's audio_codec overlay names), best first.
+_AUDIO: list[tuple[str, re.Pattern[str]]] = [
+    ("dts-x", _w(r"dts[ ._:-]?x")),
+    ("dts-hd_ma", _w(r"dts[ ._-]?hd[ ._-]?ma")),
+    ("dts-hd", _w(r"dts[ ._-]?hd")),
+    ("dts-es", _w(r"dts[ ._-]?es")),
+    ("truehd", _w(r"true[ ._-]?hd")),
+    ("dd+", _DDP),
+    ("dts", _w(r"dts")),
+    ("dd", _w(r"(ac3|dd|dolby[ ._-]?digital)(?:[ ._-]?\d\.\d)?")),
+    ("flac", _w(r"flac")),
+    ("pcm", _w(r"l?pcm")),
+    ("opus", _w(r"opus")),
+    ("aac", _w(r"aac")),
+    ("mp3", _w(r"mp3")),
+]
+# Plex's audioCodec -> audio key.
+PLEX_AUDIO = {
+    "truehd": "truehd",
+    "eac3": "dd+",
+    "ac3": "dd",
+    "dca": "dts",
+    "dts": "dts",
+    "dca-ma": "dts-hd_ma",
+    "flac": "flac",
+    "pcm": "pcm",
+    "opus": "opus",
+    "aac": "aac",
+    "mp3": "mp3",
+}
+# Image names to try for an audio key, best first.
+AUDIO_NAMES = {
+    "truehd_atmos": ["truehd_atmos", "TrueHD Atmos", "atmos", "truehd"],
+    "dd+_atmos": ["dd+_atmos", "DD+ Atmos", "atmos", "dd+", "ddp", "eac3"],
+    "dts-hd_ma": ["dts-hd_ma", "DTS-HD MA", "dts-hd", "dts"],
+    "dts-x": ["dts-x", "dtsx", "dts"],
+    "dts-hd": ["dts-hd", "dts"],
+    "dts-es": ["dts-es", "dts"],
+    "dd+": ["dd+", "ddp", "eac3", "Dolby Digital Plus"],
+    "dd": ["dd", "ac3", "Dolby Digital"],
+    "pcm": ["pcm", "lpcm"],
+}
+
+
+def audio_key(name: str) -> str | None:
+    """The audio codec Radarr/Sonarr wrote into a file name (``TrueHD Atmos 7.1``)."""
+    codec = next((key for key, pattern in _AUDIO if pattern.search(name)), None)
+    if _ATMOS.search(name):
+        if codec == "truehd" or codec is None:
+            return "truehd_atmos" if codec else "atmos"
+        if codec == "dd+":
+            return "dd+_atmos"
+    return codec
+
+
+def audio_names(key: str | None) -> list[str]:
+    if not key:
+        return []
+    return AUDIO_NAMES.get(key, [key])
+
 
 # Edition names as Plex/Radarr write them -> the jmxd/Kometa edition image key.
 EDITIONS: list[tuple[str, re.Pattern[str]]] = [
@@ -126,6 +195,8 @@ def from_filename(path: str | None) -> dict[str, Any]:
     tag = _EDITION_TAG.search(name)
     if tag:
         facts["edition"] = tag.group(1).strip()
+    if audio := audio_key(name):
+        facts["audio"] = audio
     return facts
 
 
@@ -141,6 +212,9 @@ def merge(server_media: list[dict[str, Any] | None], path: str | None) -> dict[s
     for key in ("studio", "content_rating"):
         if value := next((m[key] for m in sources if m.get(key)), None):
             facts[key] = value
+    # The file name says more about audio (Atmos) than a server's codec does.
+    if audio := next((m["audio"] for m in reversed(sources) if m.get("audio")), None):
+        facts["audio"] = audio
     genres: list[str] = []
     for m in sources:
         genres += [

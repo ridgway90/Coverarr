@@ -383,6 +383,9 @@ class JellyfinClient(MediaServerClient):
             out += [self._to_item(r, kinds[r["Type"]]) for r in rows if r.get("Type") in kinds]
         return out
 
+    async def delete_collection(self, library_remote_id: str | None, collection_id: str) -> None:
+        await self._request("DELETE", f"/Items/{collection_id}")
+
     async def remove_from_collection(
         self, library_remote_id: str | None, collection_id: str, member_ids: list[str]
     ) -> None:

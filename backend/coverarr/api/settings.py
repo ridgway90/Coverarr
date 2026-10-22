@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -39,6 +40,10 @@ async def update_settings(body: dict[str, Any], session: AsyncSession = Depends(
         elif key == "server_load":
             if value not in ("gentle", "normal", "fast"):
                 raise HTTPException(422, "server_load must be gentle, normal or fast")
+        elif key == "watch_region":
+            value = str(value or "").strip().upper()
+            if not re.fullmatch(r"[A-Z]{2}", value):
+                raise HTTPException(422, "The streaming region is a country code, e.g. GB")
         elif isinstance(value, str):
             value = value.strip()
         await set_setting(session, key, value)

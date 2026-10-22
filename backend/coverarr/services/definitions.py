@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from sqlalchemy import select
@@ -40,6 +41,7 @@ from coverarr.services.lists import (
     tmdb_id_from,
 )
 from coverarr.services.matching import normalize_collection_name, normalize_title
+from coverarr.services.seasons import in_season
 from coverarr.services.settings_store import get_setting
 
 MAX_MISSING_LISTED = 100
@@ -179,13 +181,19 @@ async def _library_matches(
     if rows is None:
         rows = lists.library_items[library.id] = (
             await session.execute(
-                select(MediaItem.id, MediaItem.title, MediaItem.year, MediaItem.facts).where(
-                    MediaItem.library_id == library.id, MediaItem.kind == library.kind
-                )
+                select(
+                    MediaItem.id,
+                    MediaItem.title,
+                    MediaItem.year,
+                    MediaItem.facts,
+                    MediaItem.details,
+                ).where(MediaItem.library_id == library.id, MediaItem.kind == library.kind)
             )
         ).all()
     conditions = parse_filter(builder["value"])
-    picked = [r for r in rows if matches(conditions, r.year, r.facts)]
+    picked = [
+        r for r in rows if matches(conditions, r.year, {**(r.details or {}), **(r.facts or {})})
+    ]
     picked.sort(key=lambda r: (r.year or 9999, r.title.lower()))
     return [(ListEntry(library.kind, r.title, r.year), r.id) for r in picked]
 
@@ -257,14 +265,19 @@ def _ordered_ids(
 
 
 async def sync_definition(
-    session: AsyncSession, definition: CollectionDefinition, lists: ListClient
+    session: AsyncSession,
+    definition: CollectionDefinition,
+    lists: ListClient,
+    today: date | None = None,
 ) -> dict[str, Any]:
     """Make the collection on every server match the definition: created where missing,
     missing titles added, and (sync mode "sync") titles no longer listed removed."""
     if definition.library_id is None:
         raise ListError("Choose a library for this collection first")
-    resolved = await resolve_definition(session, definition, lists)
     options = definition.options or {}
+    if not in_season(options.get("schedule"), today or date.today()):
+        return await _out_of_season(session, definition, options)
+    resolved = await resolve_definition(session, definition, lists)
     mode = options.get("sync_mode") or default_sync_mode(definition.builders or [])
     order = options.get("collection_order") or "release"
     wanted = resolved.ordered
@@ -288,6 +301,8 @@ async def sync_definition(
     item_labels = split_labels(options.get("item_label"))
     gone_labels = _minus(previous.get("labels_applied") or [], labels)
     gone_item_labels = _minus(previous.get("item_labels_applied") or [], item_labels)
+    # Kometa's visible_library / visible_home / visible_shared (Plex's home screens).
+    visibility = {k: bool(options[k]) for k in VISIBILITY if options.get(k) is not None}
     if resolved.errors and not wanted:
         result["notes"].append("Nothing synced: the lists couldn't be read")
         return result
@@ -417,6 +432,12 @@ async def sync_definition(
                     if coll.summary:
                         sc.summary = coll.summary
                 result["notes"] += [f"{server.name}: {n}" for n in notes]
+                if visibility and server.kind == "plex":
+                    try:
+                        notes = await client.set_visibility(sl.remote_id, sc.remote_id, visibility)
+                    except MediaServerError as exc:
+                        notes = [f"couldn't set home screen visibility: {exc}"]
+                    result["notes"] += [f"{server.name}: {n}" for n in notes]
                 if labels or gone_labels or item_labels or gone_item_labels:
                     try:
                         await client.edit_labels(
@@ -439,6 +460,53 @@ async def sync_definition(
         result["servers"][server.name] = outcome
     result["labels_applied"] = labels
     result["item_labels_applied"] = item_labels
+    return result
+
+
+VISIBILITY = ("visible_library", "visible_home", "visible_shared")
+
+
+async def _out_of_season(
+    session: AsyncSession, definition: CollectionDefinition, options: dict[str, Any]
+) -> dict[str, Any]:
+    """Outside its dates: left alone, or (``delete_not_scheduled``) taken off every server.
+    The collection's row stays, with any poster chosen for it, for next season."""
+    result: dict[str, Any] = {
+        "total": 0,
+        "in_library": 0,
+        "missing_count": 0,
+        "missing": [],
+        "errors": [],
+        "servers": {},
+        "notes": [f"Out of season ({options['schedule']}): not synced"],
+        "out_of_season": True,
+    }
+    if not options.get("delete_not_scheduled"):
+        return result
+    coll = await _find_collection(session, definition)
+    if coll is None:
+        return result
+    for sc in list(
+        await session.scalars(
+            select(ServerCollection).where(ServerCollection.collection_id == coll.id)
+        )
+    ):
+        server = await session.get(Server, sc.server_id)
+        if server is None or not server.enabled:
+            continue
+        lib = (
+            await session.get(ServerLibrary, sc.server_library_id) if sc.server_library_id else None
+        )
+        try:
+            async with client_for(server) as client:
+                await client.delete_collection(lib.remote_id if lib else None, sc.remote_id)
+        except MediaServerError as exc:
+            result["servers"][server.name] = {"error": str(exc)}
+            continue
+        await session.delete(sc)
+        result["servers"][server.name] = {"deleted": True}
+    if result["servers"]:
+        result["notes"] = [f"Out of season ({options['schedule']}): removed from the servers"]
     return result
 
 
@@ -548,6 +616,11 @@ async def run_sync_definitions(ctx: JobContext) -> dict[str, Any]:
 
     summary: dict[str, int] = defaultdict(int)
     push_ids: list[int] = []
+    if ctx.params.get("details"):
+        from coverarr.services.details import run_fetch_details
+        from coverarr.services.schedule import StageContext
+
+        await run_fetch_details(StageContext(ctx, 0.0, 0.0, {}))
     async with ctx.sessionmaker() as session:
         query = select(CollectionDefinition).order_by(CollectionDefinition.name)
         if ctx.params.get("ids"):

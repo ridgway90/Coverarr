@@ -3,10 +3,12 @@ layers.
 
 ``resolution`` turns on the resolution badge (and the edition badge on films, unless
 ``use_edition: false``), ``network`` the network logo on shows, ``episode_info`` the episode
-number on title cards. ``builder_level: season`` / ``episode`` puts them on that level instead
-of the film or show. Kometa's other defaults (ratings, ribbons, streaming, ...) aren't
-supported and are reported. A library that already has overlay settings in Coverarr is left as
-it is, and overlays stay off until you turn them on.
+number on title cards, ``streaming`` / ``ribbon`` / ``status`` / ``audio_codec`` add those
+badges, ``ratings`` adds IMDb and TMDb rating lines and ``runtimes`` the running time.
+``builder_level: season`` / ``episode`` puts them on that level instead of the film or show.
+Kometa's other defaults (languages, versions, ...) aren't supported and are reported. A
+library that already has overlay settings in Coverarr is left as it is, and overlays stay off
+until you turn them on.
 """
 
 from __future__ import annotations
@@ -16,18 +18,67 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.models import Library
-from coverarr.services.overlays import LEVELS, default_library, load_config, save_config
+from coverarr.services.overlays import (
+    LEVELS,
+    _badge,
+    _text,
+    default_library,
+    load_config,
+    save_config,
+)
 
 # Kometa default -> Coverarr layer types it turns on.
 LAYERS = {
     "resolution": ("resolution", "edition"),
     "network": ("network",),
     "episode_info": ("text",),
+    "streaming": ("streaming",),
+    "ribbon": ("ribbon",),
+    "status": ("status",),
+    "audio_codec": ("audio",),
+    "ratings": ("rating",),
+    "runtimes": ("runtime",),
 }
+# Defaults only shows have.
+SHOW_ONLY = ("network", "status", "episode_info")
+
+
+def _new_layers(kind: str) -> list[dict]:
+    """Layers a default adds when the level doesn't have one of that type."""
+    if kind == "streaming":
+        return [_badge("streaming", "streaming", "right", "bottom")]
+    if kind == "ribbon":
+        ribbons = ["imdb_top_250", "oscars_best_picture"]
+        return [
+            _badge("ribbon", "ribbon", "right", "bottom", h_offset=0, v_offset=0, ribbons=ribbons)
+        ]
+    if kind == "status":
+        return [_badge("status", "status", "center", "top", h_offset=0)]
+    if kind == "audio":
+        return [_badge("audio", "audio_codec", "right", "top")]
+    if kind == "rating":
+        imdb = _text("IMDb {imdb_rating}", "right", "top")
+        tmdb = _text("TMDb {tmdb_rating}", "right", "top")
+        imdb.update(size=56, color="#F5C518", h_offset=50, v_offset=50)
+        tmdb.update(size=56, color="#01D277", h_offset=50, v_offset=120)
+        return [imdb, tmdb]
+    if kind == "runtime":
+        layer = _text("{runtime}", "left", "bottom")
+        layer.update(size=50, h_offset=50, v_offset=50)
+        return [layer]
+    return []
 
 
 def _truthy(value: Any) -> bool:
     return str(value).strip().lower() not in ("false", "no", "0", "off")
+
+
+def _is_rating(layer: dict) -> bool:
+    return layer["type"] == "text" and "_rating}" in (layer.get("template") or "")
+
+
+def _is_runtime(layer: dict) -> bool:
+    return layer["type"] == "text" and "{runtime}" in (layer.get("template") or "")
 
 
 async def apply_overlay_defaults(
@@ -39,6 +90,9 @@ async def apply_overlay_defaults(
         {str(e.get("default")) for e in entries if str(e.get("default")) not in LAYERS}
     )
     wanted = [e for e in entries if str(e.get("default")) in LAYERS]
+    if library.kind != "show":
+        unsupported += sorted({str(e["default"]) for e in wanted if e["default"] in SHOW_ONLY})
+        wanted = [e for e in wanted if e["default"] not in SHOW_ONLY]
     if str(library.id) in config["libraries"]:
         return {"applied": [], "unsupported": unsupported, "kept_existing": bool(wanted)}
     if not wanted:
@@ -61,11 +115,32 @@ async def apply_overlay_defaults(
         on[level] |= types
     applied = []
     for level, layers in lib["levels"].items():
+        for kind in sorted(on[level]):
+            present = any(
+                layer["type"] == kind
+                or (kind == "rating" and _is_rating(layer))
+                or (kind == "runtime" and _is_runtime(layer))
+                for layer in layers
+            )
+            if not present:
+                layers.extend(_new_layers(kind))
         for layer in layers:
-            if layer["type"] != "image":
-                layer["enabled"] = layer["type"] in on[level]
-                if layer["enabled"]:
-                    applied.append(f"{level} {layer['type']}")
+            if layer["type"] == "image":
+                continue
+            kind = (
+                "rating"
+                if _is_rating(layer)
+                else "runtime"
+                if _is_runtime(layer)
+                else layer["type"]
+            )
+            layer["enabled"] = kind in on[level]
+            if layer["enabled"]:
+                applied.append(f"{level} {kind}")
     config["libraries"][str(library.id)] = lib
     await save_config(session, config)
-    return {"applied": applied, "unsupported": unsupported, "kept_existing": False}
+    return {
+        "applied": list(dict.fromkeys(applied)),
+        "unsupported": unsupported,
+        "kept_existing": False,
+    }

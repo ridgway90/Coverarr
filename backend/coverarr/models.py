@@ -154,6 +154,10 @@ class MediaItem(Base):
     # Title, sort title, summary and labels you set in Coverarr, pushed to every server
     # (a field that's missing is left as each server has it).
     metadata_edits: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # From TMDb (and MDBList) by services/details.py: streaming services, ratings, show
+    # status, directors, cast, countries, award/chart ribbons. Kept apart from ``facts``,
+    # which every import rebuilds from the servers.
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     # Resolution / HDR / DV / edition / network merged from every server (services/mediainfo).
     facts: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)

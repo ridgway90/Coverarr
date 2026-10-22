@@ -19,6 +19,50 @@ const TYPE_LABEL: Record<LayerType, string> = {
   edition: "Edition",
   network: "Network logo",
   text: "Text",
+  streaming: "Streaming logo",
+  ribbon: "Ribbon",
+  status: "Show status",
+  audio: "Audio codec",
+};
+/** Kometa's ribbons: which chart or award a title is on. */
+export const RIBBONS: [string, string][] = [
+  ["imdb_top_250", "IMDb Top 250"],
+  ["oscars_best_picture", "Oscar Best Picture"],
+  ["oscars", "Any Oscar"],
+  ["bafta_best_film", "BAFTA Best Film"],
+  ["golden_globe_best_drama", "Golden Globe Best Drama"],
+  ["cannes_palme_dor", "Palme d'Or"],
+  ["berlinale_golden_bear", "Golden Bear"],
+  ["venice_golden_lion", "Golden Lion"],
+  ["emmys_best_drama", "Emmy Best Drama"],
+  ["razzie_worst_picture", "Razzie Worst Picture"],
+  ["imdb_lowest", "IMDb Lowest Rated"],
+];
+const badge = (type: LayerType, folder: string, h: "left" | "center" | "right", v: "top" | "center" | "bottom", extra: Partial<OverlayLayer> = {}): OverlayLayer => ({
+  type,
+  enabled: true,
+  folder,
+  h_align: h,
+  v_align: v,
+  h_offset: 50,
+  v_offset: 50,
+  scale: 1,
+  ...extra,
+});
+/** A text layer showing a rating; "Rating" in the add-layer buttons. */
+const RATING_LAYER: OverlayLayer = {
+  type: "text",
+  enabled: true,
+  template: "IMDb {imdb_rating}",
+  font: null,
+  h_align: "right",
+  v_align: "top",
+  h_offset: 50,
+  v_offset: 50,
+  size: 60,
+  color: "#F5C518",
+  stroke_width: 2,
+  stroke_color: "#000000",
 };
 const NEW_LAYER: Record<LayerType, OverlayLayer> = {
   text: {
@@ -48,6 +92,10 @@ const NEW_LAYER: Record<LayerType, OverlayLayer> = {
     v_offset: 50,
     scale: 1,
   },
+  streaming: badge("streaming", "streaming", "right", "bottom"),
+  ribbon: badge("ribbon", "ribbon", "right", "bottom", { h_offset: 0, v_offset: 0, ribbons: ["imdb_top_250", "oscars_best_picture"] }),
+  status: badge("status", "status", "center", "top", { h_offset: 0 }),
+  audio: badge("audio", "audio_codec", "right", "top"),
 };
 
 export default function OverlaysPage() {
@@ -244,7 +292,7 @@ function LibraryCard({ library, fonts }: { library: OverlayLibrary; fonts: strin
                     className={inputClass + " h-8 max-w-md flex-1 text-xs"}
                     value={layer.template ?? ""}
                     onChange={(e) => update(i, { template: e.target.value })}
-                    title="The text: {title}, {show}, {season}, {episode} and {year} are filled in; {season:02} pads to two digits"
+                    title="The text: {title}, {show}, {season}, {episode} and {year} are filled in; {season:02} pads to two digits. Also {tmdb_rating}, {imdb_rating}, {rt_rating}, {metacritic}, {runtime} and {status}; a line whose rating the title doesn't have is left out"
                   />
                 ) : (
                   <input
@@ -271,6 +319,22 @@ function LibraryCard({ library, fonts }: { library: OverlayLibrary; fonts: strin
                   </button>
                 </div>
               </div>
+              {layer.type === "ribbon" && (
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
+                  {RIBBONS.map(([key, label]) => (
+                    <label key={key} className="flex items-center gap-1">
+                      <input
+                        type="checkbox"
+                        checked={(layer.ribbons ?? []).includes(key)}
+                        onChange={(e) =>
+                          update(i, { ribbons: e.target.checked ? [...(layer.ribbons ?? []), key] : (layer.ribbons ?? []).filter((r) => r !== key) })
+                        }
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              )}
               {layer.type !== "image" && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
                   <select className={selectClass + " h-8 text-xs"} value={layer.h_align} onChange={(e) => update(i, { h_align: e.target.value as OverlayLayer["h_align"] })}>
@@ -300,6 +364,9 @@ function LibraryCard({ library, fonts }: { library: OverlayLibrary; fonts: strin
                 {TYPE_LABEL[t]}
               </Button>
             ))}
+            <Button size="sm" variant="ghost" icon={<Plus className="size-3.5" />} onClick={() => setLayers([...layers, { ...RATING_LAYER }])}>
+              Rating
+            </Button>
           </div>
           <p className="pt-2 text-xs text-muted">
             Layers are drawn top to bottom of this list. Positions are in pixels on a {level === "episode" ? "1920×1080" : "1000×1500"}{" "}
@@ -307,7 +374,11 @@ function LibraryCard({ library, fonts }: { library: OverlayLibrary; fonts: strin
             <code>resolution/4kdvhdr.png</code>, <code>edition/directors.png</code>, <code>…/Channel 4.png</code>. Text fills in{" "}
             <code>{"{title}"}</code>, <code>{"{show}"}</code>, <code>{"{season}"}</code>, <code>{"{episode}"}</code> and{" "}
             <code>{"{year}"}</code> (<code>{"{episode:02}"}</code> gives 03), and shrinks to fit the width; on episodes it makes title
-            cards.
+            cards. Ratings (<code>{"{imdb_rating}"}</code>, <code>{"{tmdb_rating}"}</code>, <code>{"{rt_rating}"}</code>,{" "}
+            <code>{"{metacritic}"}</code>), <code>{"{runtime}"}</code> and <code>{"{status}"}</code> come from TMDb (IMDb, Rotten
+            Tomatoes and Metacritic need an MDBList key), as do streaming logos, show status and ribbons: fetch them with{" "}
+            <em>Fetch details</em> on the dashboard, and they're kept fresh by the daily collection sync. A ribbon shows the first
+            ticked chart or award the title is on.
           </p>
         </div>
         <Preview libraryId={library.id} level={level} layers={layers} />

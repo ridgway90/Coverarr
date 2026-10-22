@@ -14,6 +14,7 @@ from coverarr.models import Collection, CollectionDefinition, Library, ServerCol
 from coverarr.services.definitions import split_labels
 from coverarr.services.lists import ListError, default_sync_mode, normalize_builder
 from coverarr.services.matching import normalize_collection_name
+from coverarr.services.seasons import ScheduleError, format_schedule, parse_schedule
 
 router = APIRouter(prefix="/api", tags=["definitions"])
 
@@ -77,6 +78,13 @@ class Options(BaseModel):
     # Labels (Jellyfin/Emby: tags) on the collection, and on every title in it.
     label: list[str] | str | None = None
     item_label: list[str] | str | None = None
+    # Only between these dates, e.g. range(12/01-12/31); and off the servers outside them.
+    schedule: str | None = None
+    delete_not_scheduled: bool | None = None
+    # Plex's home screens (Manage Recommendations): the library's, yours, shared users'.
+    visible_library: bool | None = None
+    visible_home: bool | None = None
+    visible_shared: bool | None = None
 
 
 class DefinitionIn(BaseModel):
@@ -110,6 +118,11 @@ def _options(options: Options, keep: dict[str, Any] | None = None) -> dict[str, 
     for key, value in sent.items():
         if key in ("label", "item_label"):
             value = split_labels(value) or None
+        elif key == "schedule" and value and str(value).strip():
+            try:
+                value = format_schedule(parse_schedule(str(value)))
+            except ScheduleError as exc:
+                raise HTTPException(422, str(exc)) from exc
         elif isinstance(value, str):
             value = value.strip()
         if value in (None, ""):

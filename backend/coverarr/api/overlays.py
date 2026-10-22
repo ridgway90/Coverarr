@@ -397,8 +397,13 @@ async def _slot_context(
         ).all()
         if f and f.get("network")
     ]
+    streaming: list[str] = []
+    for (d,) in (
+        await session.execute(select(MediaItem.details).where(MediaItem.details.is_not(None)))
+    ).all():
+        streaming += (d or {}).get("streaming") or []
     root = pack_dir(_config_dir(request), config.get("pack"))
-    return config, root, overlay_slots.catalogue(config, networks)
+    return config, root, overlay_slots.catalogue(config, networks, streaming)
 
 
 @router.get("/slots")

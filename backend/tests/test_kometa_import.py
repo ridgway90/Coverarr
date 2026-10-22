@@ -285,11 +285,14 @@ libraries:
       - default: imdb
       - default: franchise
       - default: seasonal
+      - default: universe
     overlay_files:
       - default: resolution
         template_variables:
           use_edition: false
       - default: ribbon
+      - default: status
+      - default: languages
     metadata_files:
       - file: config/films-meta.yml
   Nowhere:
@@ -328,12 +331,13 @@ async def test_defaults_overlays_and_franchises_from_config(app, authed, fake_se
         await app.state.jobs.wait_idle()
 
     report = out["defaults"]["Films"]
-    assert report["unsupported"] == ["seasonal"] and report["franchise"]
+    assert report["unsupported"] == ["universe"] and report["franchise"]
     assert out["unknown_libraries"] == ["Nowhere"]
     assert out["metadata_files"] == {"Films": ["films-meta.yml"]}
     overlays = out["overlays"]["Films"]
-    assert overlays["applied"] == ["movie resolution"]  # use_edition: false
-    assert overlays["unsupported"] == ["ribbon"]
+    # use_edition: false; the ribbon layer is added; films have no show status.
+    assert overlays["applied"] == ["movie resolution", "movie ribbon"]
+    assert overlays["unsupported"] == ["languages", "status"]
     assert out["keys_imported"] == []  # "[key]" placeholders aren't keys
 
     defs = {d["name"]: d for d in (await client.get("/api/definitions")).json()}
@@ -347,6 +351,10 @@ async def test_defaults_overlays_and_franchises_from_config(app, authed, fake_se
         {"type": "tmdb_collection", "value": "9999"}
     ]
     assert "Paddington Collection" not in defs
+    christmas = defs["Christmas"]
+    assert christmas["builders"] == [{"type": "tmdb_keyword", "value": "christmas"}]
+    assert christmas["options"]["schedule"] == "range(12/01-12/31)"
+    assert christmas["options"]["delete_not_scheduled"] is True
 
     # A genre collection syncs from the library itself, no list needed.
     synced = await _sync(app, client, defs["Family"]["id"])

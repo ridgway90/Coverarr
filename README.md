@@ -83,7 +83,13 @@ possible: it tracks what each server already has and only touches what actually 
     `with_genres=27&sort_by=popularity.desc&limit=50`)
   - your own library: titles by genre, year, decade, studio, network, resolution or content
     rating (`library_filter`, e.g. `genre=Comedy, decade=1990, genre!=Horror`); Kometa's
-    `plex_search` and `plex_all` become these
+    `plex_search` and `plex_all` become these. With the details fetched from TMDb (below) also
+    by streaming service, director, actor, country, show status or rating
+    (`streaming=Netflix`, `director=Edgar Wright`, `imdb_rating>=8`)
+  - award winners (or nominees) from Wikidata: Oscars (Best Picture, or any), BAFTA, Golden
+    Globe, Palme d'Or, Golden Bear, Golden Lion, Emmys, Razzies. Wikidata limits how often it
+    can be asked, so each answer is kept for a week
+  - TMDb keywords (`tmdb_keyword: christmas`)
   - charts: TMDb popular, top rated, trending (day/week), now playing, upcoming, airing today,
     on the air; Trakt trending, popular, anticipated, most watched this week, box office;
     AniList popular, trending and top rated (matched to your library through Kometa's anime
@@ -96,7 +102,13 @@ possible: it tracks what each server already has and only touches what actually 
   on its titles* on every film or show in it, as Kometa's `label` and `item_label` do; useful
   for Plex sharing restrictions and smart filters. A label you take off the collection comes
   off the servers on the next sync, and a title that leaves the collection loses its item
-  labels; labels you set yourself on the servers are left alone. *Sync* creates the
+  labels; labels you set yourself on the servers are left alone. *Only between* dates
+  (Kometa's `schedule: range(12/01-12/31)`, which can wrap the new year) make a seasonal
+  collection: outside them it isn't synced, and with *remove outside these dates*
+  (`delete_not_scheduled`) it's taken off the servers until next season, keeping its poster.
+  On Plex, *home screens* shows or hides the collection on the library's recommended row, your
+  home and your friends' (Kometa's `visible_library`, `visible_home`, `visible_shared`).
+  *Sync* creates the
   collection on every server that's missing it and adds the titles you have; a new collection
   from a TMDb collection gets TMDb's poster.
   Collections switched to *Keep in sync* sync daily (Settings → Automation) and in the weekly
@@ -107,6 +119,13 @@ possible: it tracks what each server already has and only touches what actually 
   public IMDb lists and single titles (`imdb_chart`, `imdb_list`, `imdb_id`). IMDb has no
   API, so Coverarr reads its pages as a browser would; if IMDb holds a request back, the sync
   reports it and leaves the collection as it is.
+- **Details from TMDb** (dashboard → *Fetch details*, and before every daily collection sync):
+  where each film and show streams in your region (Settings → General → *Streaming region*,
+  e.g. GB), its TMDb rating, running time, directors (a show's creators), top-billed cast,
+  countries and, for shows, whether it's airing, returning, ended or cancelled. With an MDBList
+  API key, IMDb, Rotten Tomatoes and Metacritic ratings too (up to 900 titles a run, within
+  MDBList's free daily limit). A title is fetched again after a week. They show on the title's
+  page and feed streaming / people / rating collections and overlays.
 - **Trakt** (Settings → General): the client ID of your Trakt app is enough for public lists
   and charts. To use private lists, *Connect Trakt* signs in with OAuth PKCE, so no client
   secret is needed. Set the app's redirect URI to the one shown (Coverarr's
@@ -138,6 +157,14 @@ possible: it tracks what each server already has and only touches what actually 
   - Resolution, HDR, Dolby Vision and edition come from Plex (and its HDR/DV filters), Jellyfin's
     picture size, and the Radarr/Sonarr file name (`[Bluray-2160p][DV HDR10]`,
     `{edition-Director's Cut}`). Seasons and shows show their best episode.
+  - **More badges**, as in Kometa's defaults: the *streaming* service's logo (the first of the
+    title's services you have a logo for, in `streaming/`), a *ribbon* for the first ticked
+    chart or award the title is on (IMDb Top 250, Oscar Best Picture… in `ribbon/`), a show's
+    *status* (`status/airing.png`, `returning`, `ended`, `canceled`) and the *audio codec*
+    (`audio_codec/truehd_atmos.png`, `dts-hd_ma`, `dd+`…; from Plex and the file name). Text
+    layers can show `{imdb_rating}`, `{tmdb_rating}`, `{rt_rating}`, `{metacritic}`,
+    `{runtime}` and `{status}`; a line whose rating a title doesn't have is left out. These need
+    the details from TMDb (above).
   - The overlaid poster is what *Changes* pushes. Before the first overlaid push, the clean
     poster is kept as the title's **Original** artwork, so overlays are always drawn on a clean
     image and never stack (like Kometa's Original Posters).
@@ -211,14 +238,19 @@ possible: it tracks what each server already has and only touches what actually 
     with the collection Kometa built on each server.
   - From `config.yml`, Kometa's `- default:` collections become list collections: `imdb`,
     `tmdb` and `trakt` charts; one per value your library has for `genre`, `decade`, `year`,
-    `resolution`, `network`, `studio` and `content_rating_*`; and `franchise`, which looks
+    `resolution`, `network`, `studio`, `content_rating_*`, `streaming` and `country`, and for
+    the directors and actors with the most titles (`director`, `actor`; these need *Fetch
+    details* first); the award defaults (`oscars`, `bafta`, `golden`, `cannes`, `berlinale`,
+    `venice`, `emmys`, `razzie`); `seasonal` (Valentine's Day, St. Patrick's Day, Halloween,
+    Thanksgiving, Christmas, New Year, each only in its season); and `franchise`, which looks
     every film up on TMDb and makes a collection for each franchise with two or more of your
     films. Default overlays (`resolution`, with `use_edition`; `network`; `episode_info`;
-    `builder_level`) switch on the matching overlay layers for libraries that have no overlay
-    settings yet (overlays stay off until you enable them). Anything else (ratings, ribbons,
-    seasonal...) is listed as not supported. Metadata files and asset folders are listed to
-    import as above. Letterboxd lists aren't supported: its terms forbid scrapers and it has
-    no public API.
+    `streaming`; `ribbon`; `status`; `audio_codec`; `ratings`; `runtimes`; `builder_level`)
+    switch on or add the matching overlay layers for libraries that have no overlay settings
+    yet (overlays stay off until you enable them). The streaming region comes over from
+    `tmdb: region`. Anything else (`universe`, `languages`...) is listed as not supported.
+    Metadata files and asset folders are listed to import as above. Letterboxd lists aren't
+    supported: its terms forbid scrapers and it has no public API.
 - **Refresh one thing instead of re-importing.** Every film, show and collection page has a
   *Refresh* button that re-reads just that title (a show brings its seasons and episodes) or
   collection from every server, re-fingerprints any poster that changed and updates the review

@@ -168,7 +168,9 @@ async def _import_config_parts(request: Request, session: AsyncSession, configs:
             if metadata:
                 out["metadata_files"][library.name] = metadata
             if defaults:
-                parsed, unsupported, franchise = await expand_defaults(session, library, defaults)
+                parsed, unsupported, franchise, notes = await expand_defaults(
+                    session, library, defaults
+                )
                 out["parsed"] += parsed
                 if franchise:
                     out["franchise_libraries"].append(library.id)
@@ -176,6 +178,7 @@ async def _import_config_parts(request: Request, session: AsyncSession, configs:
                     "collections": len(parsed),
                     "unsupported": unsupported,
                     "franchise": franchise,
+                    "notes": notes,
                 }
             if overlays:
                 out["overlays"][library.name] = await apply_overlay_defaults(
@@ -189,6 +192,7 @@ async def _import_keys(session: AsyncSession, config) -> list[str]:
     for key, value in (
         ("tmdb_api_key", config.tmdb_key),
         ("mdblist_api_key", config.mdblist_key),
+        ("watch_region", config.watch_region),
         ("trakt_client_id", config.trakt_client_id),
         ("trakt_client_secret", config.trakt_client_secret),
         ("trakt_access_token", config.trakt_access_token),

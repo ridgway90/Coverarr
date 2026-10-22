@@ -11,7 +11,19 @@ import yaml
 
 from coverarr.services.lists import BUILDERS, ListError, normalize_builder
 
-OPTIONS = ("sync_mode", "collection_order", "sort_title", "label", "item_label", "summary")
+OPTIONS = (
+    "sync_mode",
+    "collection_order",
+    "sort_title",
+    "label",
+    "item_label",
+    "summary",
+    "schedule",
+    "delete_not_scheduled",
+    "visible_library",
+    "visible_home",
+    "visible_shared",
+)
 
 
 @dataclass
@@ -41,6 +53,7 @@ class ParsedConfig:
     trakt_client_secret: str | None = None
     trakt_access_token: str | None = None
     mdblist_key: str | None = None
+    watch_region: str | None = None
     trakt_refresh_token: str | None = None
 
 
@@ -256,6 +269,13 @@ def parse_collection_file(text: str, filename: str) -> list[ParsedCollection]:
                         coll.builders.append(normalize_builder(key, value))
                     except ListError as exc:
                         coll.warnings.append(str(exc))
+            elif key == "schedule":
+                from coverarr.services.seasons import ScheduleError, format_schedule, parse_schedule
+
+                try:
+                    coll.options[key] = format_schedule(parse_schedule(str(raw)))
+                except ScheduleError as exc:
+                    coll.warnings.append(f"{exc}; it syncs all year instead")
             elif key in OPTIONS:
                 coll.options[key] = (
                     [str(v) for v in raw]
@@ -301,6 +321,8 @@ def parse_config(text: str, filename: str = "config.yml") -> ParsedConfig:
     trakt = data.get("trakt") or {}
     auth = trakt.get("authorization") or {}
     config.tmdb_key = _secret(tmdb.get("apikey"))
+    region = str(tmdb.get("region") or "").strip().upper()
+    config.watch_region = region if re.fullmatch(r"[A-Z]{2}", region) else None
     config.mdblist_key = _secret((data.get("mdblist") or {}).get("apikey"))
     config.trakt_client_id = _secret(trakt.get("client_id"))
     config.trakt_client_secret = _secret(trakt.get("client_secret"))

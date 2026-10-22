@@ -18,6 +18,7 @@ def test_filename_facts():
         "dv": True,
         "hdr": True,
         "edition": "IMAX",
+        "audio": "truehd",
     }
     assert from_filename("x [WEBDL-1080p][HDR10Plus].mkv") == {
         "resolution": "1080p",

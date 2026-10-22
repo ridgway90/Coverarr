@@ -1,5 +1,6 @@
 """Overlay images one at a time: every slot the layers can use (gradients, a badge for each
-resolution and HDR type, editions, the networks your shows use), what fills each now, and
+resolution and HDR type, editions, the networks your shows use, the streaming services your
+titles are on, ribbons, show status, audio codecs), what fills each now, and
 uploading a single image into a slot under the name and folder the renderer looks for.
 """
 
@@ -15,7 +16,7 @@ from typing import Any
 from PIL import Image
 
 from coverarr.services import overlays
-from coverarr.services.mediainfo import EDITIONS
+from coverarr.services.mediainfo import EDITIONS, audio_names
 from coverarr.services.overlays import (
     SD_RESOLUTIONS,
     OverlayError,
@@ -50,7 +51,37 @@ DEFAULT_FOLDERS = {
     "resolution": "resolution",
     "edition": "edition",
     "network": "network-images/images/network/color",
+    "streaming": "streaming",
+    "ribbon": "ribbon",
+    "status": "status",
+    "audio": "audio_codec",
 }
+STATUS_LABELS = {
+    "airing": "Airing",
+    "returning": "Returning",
+    "ended": "Ended",
+    "canceled": "Canceled",
+}
+AUDIO_LABELS = {
+    "truehd_atmos": "TrueHD Atmos",
+    "dd+_atmos": "DD+ Atmos",
+    "atmos": "Atmos",
+    "dts-x": "DTS:X",
+    "dts-hd_ma": "DTS-HD MA",
+    "dts-hd": "DTS-HD",
+    "dts-es": "DTS-ES",
+    "truehd": "TrueHD",
+    "dd+": "Dolby Digital Plus",
+    "dts": "DTS",
+    "dd": "Dolby Digital",
+    "flac": "FLAC",
+    "pcm": "PCM",
+    "opus": "Opus",
+    "aac": "AAC",
+    "mp3": "MP3",
+}
+# Logos for names no title uses yet are kept in their folder for later.
+LOGO_GROUPS = ("network", "streaming")
 
 
 @dataclass
@@ -90,7 +121,16 @@ def gradient_files(config: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(files))
 
 
-def catalogue(config: dict[str, Any], networks: list[str]) -> list[Slot]:
+def _logo_path(folder: str, name: str, fallback: str) -> str:
+    safe = re.sub(r"[\\/:*?\"<>|]", "", name).strip() or fallback
+    return f"{folder}/{safe}.png"
+
+
+def catalogue(
+    config: dict[str, Any], networks: list[str], streaming: list[str] | None = None
+) -> list[Slot]:
+    from coverarr.services.details import RIBBONS
+
     f = folders(config)
     slots: list[Slot] = []
     for file in gradient_files(config):
@@ -117,8 +157,19 @@ def catalogue(config: dict[str, Any], networks: list[str]) -> list[Slot]:
         label = EDITION_LABELS.get(key, key.capitalize())
         slots.append(Slot("edition", f"{f['edition']}/{key}.png", label, [key], f["edition"]))
     for name in sorted(set(networks), key=str.lower):
-        safe = re.sub(r"[\\/:*?\"<>|]", "", name).strip() or "network"
-        slots.append(Slot("network", f"{f['network']}/{safe}.png", name, [name], f["network"]))
+        path = _logo_path(f["network"], name, "network")
+        slots.append(Slot("network", path, name, [name], f["network"]))
+    for name in sorted(set(streaming or []), key=str.lower):
+        path = _logo_path(f["streaming"], name, "streaming")
+        slots.append(Slot("streaming", path, name, [name], f["streaming"]))
+    for key in RIBBONS:
+        label = key.replace("_", " ").replace("imdb", "IMDb").title().replace("Imdb", "IMDb")
+        slots.append(Slot("ribbon", f"{f['ribbon']}/{key}.png", label, [key], f["ribbon"]))
+    for key, label in STATUS_LABELS.items():
+        slots.append(Slot("status", f"{f['status']}/{key}.png", label, [key], f["status"]))
+    for key, label in AUDIO_LABELS.items():
+        names = audio_names(key)
+        slots.append(Slot("audio", f"{f['audio']}/{key}.png", label, names, f["audio"]))
     return slots
 
 
@@ -224,7 +275,10 @@ def guess(filename: str, slots: list[Slot]) -> str | None:
                 return s.path
         return None
     for s in slots:
-        if s.group == "network" and _squash(s.label) == flat:
+        if s.group in (*LOGO_GROUPS, "status", "audio", "ribbon") and _squash(s.label) == flat:
+            return s.path
+    for s in slots:
+        if s.group == "audio" and any(_squash(n) == flat for n in s.names[:2]):
             return s.path
     for key, pattern in EDITIONS:
         if pattern.search(stem):
@@ -258,7 +312,15 @@ def guess(filename: str, slots: list[Slot]) -> str | None:
 # --- sorting a pack into the slots ------------------------------------------------------------
 
 # Folder words that say which kind of image a file is (e.g. "badges/resolution/4K DV.png").
-_FOLDER_HINTS = (("network", "network"), ("resolution", "resolution"), ("edition", "edition"))
+_FOLDER_HINTS = (
+    ("network", "network"),
+    ("streaming", "streaming"),
+    ("ribbon", "ribbon"),
+    ("status", "status"),
+    ("audio", "audio"),
+    ("resolution", "resolution"),
+    ("edition", "edition"),
+)
 
 
 def _hint(rel: PurePosixPath) -> str | None:
@@ -327,8 +389,10 @@ def sort_images(
         else:
             todo.append(rel)
 
-    network_folder = next((s.folder for s in slots if s.group == "network"), None)
-    network_folder = network_folder or DEFAULT_FOLDERS["network"]
+    logo_folders = {
+        group: next((s.folder for s in slots if s.group == group), DEFAULT_FOLDERS[group])
+        for group in LOGO_GROUPS
+    }
     for rel in todo:
         source = root / _safe_rel(rel)
         if not source.is_file():  # replaced by an earlier image in this run
@@ -338,9 +402,9 @@ def sort_images(
         candidates = [s for s in slots if hint is None or s.group == hint]
         target = guess(path.name, candidates)
         if target is None:
-            if hint == "network":
-                # A logo no show uses yet: keep it where a future show will find it.
-                dest = root / network_folder / path.name
+            if hint in LOGO_GROUPS:
+                # A logo no title uses yet: keep it where a future one will find it.
+                dest = root / logo_folders[hint] / path.name
                 if source != dest:
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     os.replace(source, dest)

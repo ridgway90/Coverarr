@@ -8,7 +8,7 @@ import BackgroundChooser from "../components/BackgroundChooser";
 import MetadataEditor from "../components/MetadataEditor";
 import PendingPush from "../components/PendingPush";
 import { Button, Card, ErrorNote, PageHeader, Poster, PresenceChips, Spinner, cx } from "../components/ui";
-import { api, type ItemDetail } from "../lib/api";
+import { api, type ItemDetail, type TitleDetails } from "../lib/api";
 import { useJobAction, useLibraries, useServerMap } from "../lib/hooks";
 import { useBack } from "../lib/navTrail";
 import { describeIssue } from "./ReviewPage";
@@ -95,6 +95,7 @@ export default function ItemDetailPage() {
         }
       />
       <ErrorNote error={reload.error} />
+      {item.details?.fetched && <DetailsLine details={item.details} />}
       {reload.job && !reload.running && (
         <div
           className={
@@ -258,5 +259,24 @@ function SeasonNav({ showId, seasonId }: { showId: number; seasonId: number }) {
         </>,
       )}
     </div>
+  );
+}
+
+/** Ratings, streaming services, status and people fetched from TMDb. */
+function DetailsLine({ details }: { details: TitleDetails }) {
+  const parts = [
+    details.imdb_rating !== undefined && `IMDb ${details.imdb_rating}`,
+    details.tmdb_rating !== undefined && `TMDb ${details.tmdb_rating}`,
+    details.rt_rating !== undefined && `Rotten Tomatoes ${details.rt_rating}%`,
+    details.metacritic !== undefined && `Metacritic ${details.metacritic}`,
+    details.status && details.status[0].toUpperCase() + details.status.slice(1),
+    details.streaming?.length ? `Streaming on ${details.streaming.join(", ")}` : "Not on a streaming service",
+    details.directors?.length && `${details.directors.join(", ")}`,
+    details.countries?.length && details.countries.join(", "),
+  ].filter(Boolean);
+  return (
+    <p className="mb-4 text-sm text-muted" title={details.cast?.length ? `Starring ${details.cast.join(", ")}` : undefined}>
+      {parts.join(" · ")}
+    </p>
   );
 }

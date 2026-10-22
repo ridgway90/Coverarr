@@ -2,10 +2,13 @@
 list collections.
 
 Chart defaults become chart collections. Defaults with one collection per value (genre,
-decade, year, resolution, network, studio, content rating) become one library-filter
-collection for each value the library has now. ``franchise`` looks every film up on TMDb and
-makes a TMDb-collection collection for each franchise with two or more of your films; that
-takes a while, so it runs as a job. Anything else is reported as not supported.
+decade, year, resolution, network, studio, content rating, and from the details fetched from
+TMDb: streaming service, country, director, actor) become one library-filter collection for
+each value the library has now. Award defaults (oscars, bafta, ...) become Wikidata award
+collections, and ``seasonal`` makes holiday collections that only exist in their season.
+``franchise`` looks every film up on TMDb and makes a TMDb-collection collection for each
+franchise with two or more of your films; that takes a while, so it runs as a job. Anything
+else is reported as not supported.
 """
 
 from __future__ import annotations
@@ -55,7 +58,48 @@ PER_VALUE = {
     "network": "network",
     "studio": "studio",
     "content_rating": "content_rating",
+    "streaming": "streaming",
+    "country": "country",
+    "director": "director",
+    "actor": "actor",
 }
+# People collections: only those with this many titles, and at most this many collections
+# (Kometa's defaults make the top 25).
+PEOPLE_MIN = {"director": 2, "actor": 3}
+PEOPLE_MAX = 25
+# Where details keep each per-value key.
+DETAIL_LISTS = {
+    "streaming": "streaming",
+    "country": "countries",
+    "director": "directors",
+    "actor": "cast",
+}
+# Kometa award default -> [(collection name, Wikidata award), ...], and the library kind.
+AWARD_DEFAULTS: dict[str, tuple[str, list[tuple[str, str]]]] = {
+    "oscars": (
+        "movie",
+        [("Oscar Best Picture Winners", "oscars_best_picture"), ("Oscar Winners", "oscars")],
+    ),
+    "bafta": (
+        "movie",
+        [("BAFTA Best Film Winners", "bafta_best_film"), ("BAFTA Winners", "bafta")],
+    ),
+    "golden": ("movie", [("Golden Globe Best Drama Winners", "golden_globe_best_drama")]),
+    "cannes": ("movie", [("Palme d'Or Winners", "cannes_palme_dor")]),
+    "berlinale": ("movie", [("Golden Bear Winners", "berlinale_golden_bear")]),
+    "venice": ("movie", [("Golden Lion Winners", "venice_golden_lion")]),
+    "razzie": ("movie", [("Razzie Worst Picture Winners", "razzie_worst_picture")]),
+    "emmys": ("show", [("Emmy Best Drama Winners", "emmys_best_drama")]),
+}
+# Kometa's seasonal default: (name, TMDb keyword, schedule).
+SEASONAL = [
+    ("Valentine's Day", "valentine's day", "range(02/01-02/14)"),
+    ("St. Patrick's Day", "st. patrick's day", "range(03/01-03/17)"),
+    ("Halloween", "halloween", "range(10/01-10/31)"),
+    ("Thanksgiving", "thanksgiving", "range(11/01-11/30)"),
+    ("Christmas", "christmas", "range(12/01-12/31)"),
+    ("New Year", "new year's eve", "range(12/26-01/05)"),
+]
 RESOLUTION_NAMES = {"4k": "4K", "1080p": "1080p", "720p": "720p", "576p": "576p", "480p": "SD"}
 MIN_FRANCHISE_FILMS = 2
 
@@ -81,13 +125,15 @@ async def library_values(session: AsyncSession, library: Library, key: str) -> l
     """Every value the library's titles have for ``key``, most titles first."""
     counts: dict[str, int] = defaultdict(int)
     rows = await session.execute(
-        select(MediaItem.year, MediaItem.facts).where(
+        select(MediaItem.year, MediaItem.facts, MediaItem.details).where(
             MediaItem.library_id == library.id, MediaItem.kind == library.kind
         )
     )
-    for year, facts in rows:
+    for year, facts, details in rows:
         facts = facts or {}
-        if key == "year":
+        if key in DETAIL_LISTS:
+            values = [str(v) for v in (details or {}).get(DETAIL_LISTS[key]) or []]
+        elif key == "year":
             values = [str(year)] if year else []
         elif key == "decade":
             values = [str(year // 10 * 10)] if year else []
@@ -99,15 +145,19 @@ async def library_values(session: AsyncSession, library: Library, key: str) -> l
             counts[value] += 1
     if key in ("year", "decade"):
         return sorted(counts, reverse=True)
-    return sorted(counts, key=lambda v: (-counts[v], v.lower()))
+    ordered = sorted(counts, key=lambda v: (-counts[v], v.lower()))
+    if key in PEOPLE_MIN:
+        ordered = [v for v in ordered if counts[v] >= PEOPLE_MIN[key]][:PEOPLE_MAX]
+    return ordered
 
 
 async def expand_defaults(
     session: AsyncSession, library: Library, defaults: list[str]
-) -> tuple[list[ParsedCollection], list[str], bool]:
-    """(collections, defaults not supported, whether franchises were asked for)."""
+) -> tuple[list[ParsedCollection], list[str], bool, list[str]]:
+    """(collections, defaults not supported, whether franchises were asked for, notes)."""
     parsed: list[ParsedCollection] = []
     unsupported: list[str] = []
+    notes: list[str] = []
     franchise = False
     for default in defaults:
         source = f"default: {default}"
@@ -122,9 +172,45 @@ async def expand_defaults(
                             library_id=library.id,
                         )
                     )
+        elif default in AWARD_DEFAULTS:
+            kind, awards = AWARD_DEFAULTS[default]
+            if library.kind != kind:
+                unsupported.append(default)
+                continue
+            for name, award in awards:
+                parsed.append(
+                    ParsedCollection(
+                        name=name,
+                        source_file=source,
+                        builders=[{"type": "wikidata_award", "value": award}],
+                        options={"collection_order": "release"},
+                        library_id=library.id,
+                    )
+                )
+        elif default == "seasonal":
+            for name, keyword, schedule in SEASONAL:
+                parsed.append(
+                    ParsedCollection(
+                        name=name,
+                        source_file=source,
+                        builders=[{"type": "tmdb_keyword", "value": keyword}],
+                        options={
+                            "collection_order": "alpha",
+                            "schedule": schedule,
+                            "delete_not_scheduled": True,
+                        },
+                        library_id=library.id,
+                    )
+                )
         elif key := _per_value_key(default):
             if key == "network" and library.kind != "show":
                 unsupported.append(default)
+                continue
+            if key in DETAIL_LISTS and not await _has_details(session, library):
+                notes.append(
+                    f"{default}: fetch details from TMDb first (dashboard → Fetch details), "
+                    "then import config.yml again"
+                )
                 continue
             for value in await library_values(session, library, key):
                 parsed.append(
@@ -140,7 +226,16 @@ async def expand_defaults(
             franchise = True
         else:
             unsupported.append(default)
-    return parsed, unsupported, franchise
+    return parsed, unsupported, franchise, notes
+
+
+async def _has_details(session: AsyncSession, library: Library) -> bool:
+    found = await session.scalar(
+        select(MediaItem.id)
+        .where(MediaItem.library_id == library.id, MediaItem.details.is_not(None))
+        .limit(1)
+    )
+    return found is not None
 
 
 async def run_kometa_franchises(ctx: JobContext) -> dict[str, Any]:

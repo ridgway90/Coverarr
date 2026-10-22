@@ -279,6 +279,16 @@ class MediaServerClient(ABC):
     ) -> None: ...
 
     @abstractmethod
+    async def delete_collection(self, library_remote_id: str | None, collection_id: str) -> None:
+        """Delete a collection (its titles stay in the library)."""
+
+    async def set_visibility(
+        self, library_remote_id: str | None, collection_id: str, visibility: dict[str, bool]
+    ) -> list[str]:
+        """Where a collection shows on the home screens (Plex only); returns notes."""
+        return ["home screen visibility is a Plex setting"]
+
+    @abstractmethod
     async def update_collection(
         self,
         library_remote_id: str | None,

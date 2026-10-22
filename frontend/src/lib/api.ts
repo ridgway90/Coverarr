@@ -150,13 +150,15 @@ export interface RenderedPoster {
 
 export type PosterRef = Presence | Artwork | RenderedPoster;
 
-export type LayerType = "image" | "resolution" | "edition" | "network" | "text";
+export type LayerType = "image" | "resolution" | "edition" | "network" | "text" | "streaming" | "ribbon" | "status" | "audio";
 
 export interface OverlayLayer {
   type: LayerType;
   enabled: boolean;
   file?: string;
   folder?: string;
+  // ribbon layers: which ribbons, best first (a title shows the first it has)
+  ribbons?: string[];
   h_align?: "left" | "center" | "right";
   v_align?: "top" | "center" | "bottom";
   h_offset?: number;
@@ -280,6 +282,22 @@ export interface ItemDetail extends Omit<ItemSummary, "issues"> {
   artwork: Artwork[];
   collections: { id: number; name: string }[];
   issues: Issue[];
+  /** From TMDb / MDBList (Fetch details). */
+  details?: TitleDetails;
+}
+
+export interface TitleDetails {
+  streaming?: string[];
+  tmdb_rating?: number;
+  imdb_rating?: number;
+  rt_rating?: number;
+  metacritic?: number;
+  status?: string;
+  directors?: string[];
+  cast?: string[];
+  countries?: string[];
+  ribbons?: string[];
+  fetched?: string;
 }
 
 export interface CollectionServer extends Presence {

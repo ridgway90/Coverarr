@@ -360,7 +360,33 @@ ITEM_INFO = (
     MediaItem.season_number,
     MediaItem.episode_number,
     MediaItem.facts,
+    MediaItem.details,
 )
+
+
+def overlay_facts(item: Any) -> dict[str, Any]:
+    """What overlays know about a title: the servers' facts and the details from TMDb."""
+    return {**(item.details or {}), **(item.facts or {})}
+
+
+def detail_text(details: dict[str, Any] | None) -> dict[str, str]:
+    """Ratings, runtime and status as overlay text shows them."""
+    out: dict[str, str] = {}
+    d = details or {}
+    for key in ("tmdb_rating", "imdb_rating", "letterboxd_rating"):
+        if isinstance(d.get(key), int | float):
+            out[key] = f"{d[key]:.1f}"
+    for key in ("rt_rating", "rt_audience"):
+        if isinstance(d.get(key), int | float):
+            out[key] = f"{round(d[key])}%"
+    if isinstance(d.get("metacritic"), int | float):
+        out["metacritic"] = str(round(d["metacritic"]))
+    if isinstance(d.get("runtime"), int) and d["runtime"] > 0:
+        hours, minutes = divmod(d["runtime"], 60)
+        out["runtime"] = f"{hours}h {minutes}m" if hours else f"{minutes}m"
+    if d.get("status"):
+        out["status"] = str(d["status"]).title()
+    return out
 
 
 async def _labels_for(
@@ -410,6 +436,7 @@ async def _labels_for(
                 else (season.season_number if season else None),
                 "episode": item.episode_number,
                 "year": item.year or top.year,
+                **detail_text(item.details),
             }
     return out
 
@@ -466,7 +493,15 @@ async def compute_changes(
                 layers = setup.layers_for(t.library_id, t.kind)
                 if layers is not None:
                     _assess_overlay(
-                        change, rows[t.id], arts, t.facts, layers, setup, kinds, force, info[t.id]
+                        change,
+                        rows[t.id],
+                        arts,
+                        overlay_facts(t),
+                        layers,
+                        setup,
+                        kinds,
+                        force,
+                        info[t.id],
                     )
                 else:
                     _assess(change, rows[t.id], arts, threshold, force)
@@ -924,5 +959,5 @@ async def plan_item(
     info: dict[int, dict[str, Any]] = {}
     title, top = (await _labels_for(session, [t], info))[t.id]
     change = Change("item", t.id, title, t.kind, t.library_id, t.poster_source or "", top, None)
-    _assess_overlay(change, rows, arts, t.facts, layers, setup, kinds, info=info[t.id])
+    _assess_overlay(change, rows, arts, overlay_facts(t), layers, setup, kinds, info=info[t.id])
     return change

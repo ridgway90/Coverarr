@@ -13,6 +13,7 @@ PUBLIC_KEYS = {
     "trakt_client_id",
     "trakt_client_secret",
     "mdblist_api_key",
+    "watch_region",
     "poster_match_threshold",
     "server_load",
 }
@@ -23,6 +24,8 @@ DEFAULTS: dict[str, Any] = {
     "poster_match_threshold": 10,
     # gentle | normal | fast, see services/load.py
     "server_load": "normal",
+    # Country whose streaming services count (TMDb's watch providers), e.g. GB.
+    "watch_region": "US",
 }
 
 

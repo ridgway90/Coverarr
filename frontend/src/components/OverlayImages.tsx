@@ -5,7 +5,7 @@ import { api, qs, uploadWithProgress } from "../lib/api";
 import { Button, Card, ErrorNote, Modal, Spinner, Tabs, cx, inputClass, selectClass } from "./ui";
 
 interface Slot {
-  group: "gradient" | "resolution" | "edition" | "network";
+  group: "gradient" | "resolution" | "edition" | "network" | "streaming" | "ribbon" | "status" | "audio";
   path: string;
   label: string;
   row: string | null;
@@ -23,10 +23,14 @@ interface SlotsData {
 
 type Group = Slot["group"];
 const GROUPS: { id: Group; label: string }[] = [
-  { id: "resolution", label: "Resolution & HDR" },
+  { id: "resolution", label: "Resolution" },
   { id: "gradient", label: "Gradients" },
   { id: "edition", label: "Editions" },
   { id: "network", label: "Networks" },
+  { id: "streaming", label: "Streaming" },
+  { id: "ribbon", label: "Ribbons" },
+  { id: "status", label: "Status" },
+  { id: "audio", label: "Audio" },
 ];
 const ROWS = [
   ["4k", "4K"],
@@ -392,11 +396,17 @@ export default function OverlayImages() {
             </div>
           ) : (
             <>
-              {group === "network" && (
-                <input className={inputClass + " mb-3 max-w-xs"} placeholder="Find a network" value={filter} onChange={(e) => setFilter(e.target.value)} />
+              {(group === "network" || group === "streaming") && (
+                <input className={inputClass + " mb-3 max-w-xs"} placeholder={group === "network" ? "Find a network" : "Find a service"} value={filter} onChange={(e) => setFilter(e.target.value)} />
               )}
               {shown.length === 0 ? (
-                <p className="text-sm text-muted">{group === "network" ? "No shows with a network yet; run an import." : "Nothing here."}</p>
+                <p className="text-sm text-muted">
+                  {group === "network"
+                    ? "No shows with a network yet; run an import."
+                    : group === "streaming"
+                      ? "No streaming services yet; use Fetch details on the dashboard (needs a TMDb key)."
+                      : "Nothing here."}
+                </p>
               ) : (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">{shown.map((s) => tile(s))}</div>
               )}

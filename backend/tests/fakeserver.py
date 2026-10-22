@@ -165,6 +165,8 @@ class FakeServer:
         # Files on disk the server hasn't scanned yet; a scan of their folder adds them.
         self.unscanned: list[Item] = []
         self.scans: list[str] = []
+        # Plex hub id -> its home screen flags (Manage Recommendations).
+        self.hubs: dict[str, dict[str, str]] = {}
 
     def new_id(self) -> str:
         n = next(self._ids)
@@ -595,6 +597,40 @@ def plex_router(srv: FakeServer) -> APIRouter:
             request, [meta(i) for i in srv.items.values() if i.show == rk and i.kind == "episode"]
         )
 
+    @r.delete("/library/metadata/{rk}")
+    async def delete_metadata(rk: str, request: Request):
+        auth(request)
+        srv.collections.pop(rk, None) or _missing()
+        return {"MediaContainer": {}}
+
+    def hub_id(lib: str, rk: str) -> str:
+        return f"custom.collection.{lib}.{rk}"
+
+    @r.get("/hubs/sections/{lib}/manage")
+    async def hubs(lib: str, request: Request):
+        auth(request)
+        rk = request.query_params.get("metadataItemId", "")
+        hid = hub_id(lib, rk)
+        found = [{"identifier": hid, **srv.hubs[hid]}] if hid in srv.hubs else []
+        return {"MediaContainer": {"Hub": found}}
+
+    @r.post("/hubs/sections/{lib}/manage")
+    async def make_hub(lib: str, request: Request):
+        auth(request)
+        rk = request.query_params["metadataItemId"]
+        if rk not in srv.collections:
+            _missing()
+        srv.hubs.setdefault(hub_id(lib, rk), {})
+        return {"MediaContainer": {}}
+
+    @r.put("/hubs/sections/{lib}/manage/{hid}")
+    async def set_hub(lib: str, hid: str, request: Request):
+        auth(request)
+        if hid not in srv.hubs:
+            _missing()
+        srv.hubs[hid] = dict(request.query_params)
+        return {"MediaContainer": {}}
+
     @r.delete("/library/collections/{cid}/items/{rk}")
     async def remove_member(cid: str, rk: str, request: Request):
         auth(request)
@@ -979,6 +1015,12 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
         coll = Coll(srv.new_id(), qp["Name"], "", [i for i in qp.get("Ids", "").split(",") if i])
         srv.collections[coll.id] = coll
         return {"Id": coll.id}
+
+    @r.delete("/Items/{item_id}")
+    async def delete_item(item_id: str, request: Request):
+        auth(request)
+        srv.collections.pop(item_id, None) or _missing()
+        return Response(status_code=204)
 
     @r.delete("/Collections/{cid}/Items")
     async def remove(cid: str, request: Request):
