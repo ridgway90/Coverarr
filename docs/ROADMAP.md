@@ -57,5 +57,6 @@ Plex, Jellyfin and Emby, doing only the work that a change actually requires.
 - [x] Episode title cards (text layers: episode number and title, with any font)
 - [x] Backgrounds (fanart) as managed artwork: chosen per title, pushed everywhere
 - Metadata edits (titles, sort titles, summaries, labels)
-- MediUX / ThePosterDB set import
+- [x] MediUX sets via their Kometa YAML (posters, seasons, episode cards, backgrounds).
+  ThePosterDB's terms forbid scraping, so its sets stay a manual download + zip import.
 - Import an existing Kometa config

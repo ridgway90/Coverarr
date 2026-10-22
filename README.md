@@ -38,6 +38,11 @@ possible: it tracks what each server already has and only touches what actually 
   such as a set you've downloaded from ThePosterDB: `Hot Fuzz (2007).jpg`,
   `Cornetto Collection.jpg`, `Spaced (1999) - Season 1.jpg`. ThePosterDB has no API and its
   terms forbid automated downloads, so download the set yourself and import the zip.
+  **MediUX** sets (and any Kometa metadata with image links) can be imported by pasting their
+  *Kometa YAML*: `url_poster` and `url_background` keyed by TMDb/TVDb id or "Title (Year)",
+  with `seasons` and their `episodes`. Posters, season posters, episode title cards and
+  backgrounds are downloaded (over https, from MediUX, TMDb, GitHub, Imgur or a ThePosterDB
+  poster link you give it) and become the bases, ready to push.
   On a film, show or collection page, **Upload poster set** imports a zip for just that title:
   a show's poster and its seasons (files may be named just `Season 1.jpg` or `Specials.jpg`),
   or a collection's poster and its films. A single file named some other way

@@ -49,6 +49,7 @@ from coverarr.services.refresh import (
     run_refresh_item,
 )
 from coverarr.services.schedule import Scheduler, run_safety_scan
+from coverarr.services.set_links import run_url_artwork
 from coverarr.services.settings_store import ensure_secret
 
 
@@ -77,6 +78,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
         runner.register("fix_match", run_fix_match)
         runner.register("collection_rename", run_collection_rename)
         runner.register("kometa_originals", run_kometa_originals)
+        runner.register("url_artwork", run_url_artwork)
         runner.register("refresh_item", run_refresh_item)
         runner.register("refresh_collection", run_refresh_collection)
         runner.register("collection_remove", run_collection_remove)
