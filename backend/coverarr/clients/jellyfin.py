@@ -139,7 +139,7 @@ class JellyfinClient(MediaServerClient):
             "Recursive": "true",
             "IncludeItemTypes": ITEM_TYPES[kind],
             "Fields": FIELDS,
-            "EnableImageTypes": "Primary",
+            "EnableImageTypes": "Primary,Backdrop",
             # Oldest first, so titles added during the listing land at the end rather than
             # shifting the pages still to come.
             "SortBy": "DateCreated,SortName",
@@ -160,6 +160,9 @@ class JellyfinClient(MediaServerClient):
             tvdb_id=ids.get("tvdb"),
             imdb_id=ids.get("imdb"),
             poster_ref=(row.get("ImageTags") or {}).get("Primary"),
+            background_ref=(row.get("BackdropImageTags") or [None])[0]
+            if kind in ("movie", "show")
+            else None,
             labels=[str(t) for t in row.get("Tags") or []],
             path=row.get("Path"),
             media=_media_facts(row, kind),
@@ -340,7 +343,7 @@ class JellyfinClient(MediaServerClient):
                 "Recursive": "true",
                 "IncludeItemTypes": ITEM_TYPES[kind],
                 "Fields": FIELDS,
-                "EnableImageTypes": "Primary",
+                "EnableImageTypes": "Primary,Backdrop",
                 "SortBy": "DateCreated",
                 "SortOrder": "Descending",
                 "Limit": limit,
@@ -364,7 +367,7 @@ class JellyfinClient(MediaServerClient):
                 "Recursive": "true",
                 "IncludeItemTypes": "Season,Episode",
                 "Fields": FIELDS,
-                "EnableImageTypes": "Primary",
+                "EnableImageTypes": "Primary,Backdrop",
             }
         ):
             out += [self._to_item(r, kinds[r["Type"]]) for r in rows if r.get("Type") in kinds]
@@ -391,6 +394,32 @@ class JellyfinClient(MediaServerClient):
         uid = await self.user_id()
         row = await self._json("GET", f"/Users/{uid}/Items/{item_id}")
         return (row.get("ImageTags") or {}).get("Primary")
+
+    async def fetch_background(
+        self, item_id: str, background_ref: str, max_width: int | None = None
+    ) -> bytes:
+        params: dict[str, Any] = {"tag": background_ref, "quality": 90}
+        if max_width:
+            params["maxWidth"] = max_width
+        resp = await self._request(
+            "GET",
+            f"/Items/{item_id}/Images/Backdrop/0",
+            params=params,
+            headers={"Accept": "image/*"},
+        )
+        return resp.content
+
+    async def upload_background(self, item_id: str, data: bytes, content_type: str) -> str | None:
+        # Replaces the first backdrop (the one shown), base64-encoded like posters.
+        await self._request(
+            "POST",
+            f"/Items/{item_id}/Images/Backdrop/0",
+            content=base64.b64encode(data),
+            headers={"Content-Type": content_type},
+        )
+        uid = await self.user_id()
+        row = await self._json("GET", f"/Users/{uid}/Items/{item_id}")
+        return (row.get("BackdropImageTags") or [None])[0]
 
 
 class EmbyClient(JellyfinClient):

@@ -591,8 +591,13 @@ async def _artworks(session: AsyncSession, owner_filter: Any) -> dict[int, Any]:
 
 
 async def changes_summary(session: AsyncSession) -> dict[str, int]:
+    from coverarr.services.backgrounds import background_changes
+
     changes = await pending_changes(session)
+    backgrounds = await background_changes(session)
     return {
+        "backgrounds": sum(1 for c in backgrounds if not c.problem),
+        "background_uploads": sum(len(c.servers) for c in backgrounds if not c.problem),
         "titles": sum(1 for c in changes if c.target == "item" and not c.problem),
         "collections": sum(1 for c in changes if c.target == "collection" and not c.problem),
         "uploads": sum(len(c.servers) for c in changes if not c.problem),
@@ -667,6 +672,15 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
             if coll_ids:
                 changes += await compute_changes(session, collection_ids=coll_ids, force=force)
         changes = [c for c in changes if not c.problem]
+        from coverarr.services.backgrounds import background_changes, push_backgrounds
+
+        if item_ids is None and coll_ids is None:
+            bg_changes = await background_changes(session, library_id=library_id)
+        else:
+            bg_changes = (
+                await background_changes(session, media_item_ids=item_ids) if item_ids else []
+            )
+        bg_changes = [c for c in bg_changes if not c.problem]
         servers = {s.id: s for s in await session.scalars(select(Server))}
         profile = await load_profile(session)
 
@@ -829,6 +843,17 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
         finally:
             await asyncio.shield(record())
 
+        if bg_changes:
+            await ctx.log(
+                f"{len(bg_changes)} backgrounds to push "
+                f"({sum(len(c.servers) for c in bg_changes)} uploads)"
+            )
+            names = {sid: s.name for sid, s in servers.items()}
+            for key, value in (
+                await push_backgrounds(ctx, bg_changes, clients, config_dir, names)
+            ).items():
+                counts[key] += value
+
     from coverarr.services.review import refresh_issues
 
     async with sm() as session:
@@ -839,6 +864,12 @@ async def run_push_posters(ctx: JobContext) -> dict[str, Any]:
         f"Uploaded {counts['uploaded']} posters for {counts['pushed']} titles/collections"
         + (f"; rendered {counts['rendered']} with overlays" if counts["rendered"] else "")
         + (f"; {counts['failed']} failed" if counts["failed"] else "")
+        + (
+            f"; {counts['backgrounds']} backgrounds for {counts['background_titles']} titles"
+            if counts["backgrounds"]
+            else ""
+        )
+        + (f" ({counts['backgrounds_failed']} failed)" if counts["backgrounds_failed"] else "")
     )
     return {"titles": len(changes), **counts}
 

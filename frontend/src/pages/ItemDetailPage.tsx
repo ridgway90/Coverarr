@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import PrevNext from "../components/PrevNext";
 import PosterChooser from "../components/PosterChooser";
+import BackgroundChooser from "../components/BackgroundChooser";
 import PendingPush from "../components/PendingPush";
 import { Button, Card, ErrorNote, PageHeader, Poster, PresenceChips, Spinner, cx } from "../components/ui";
 import { api, type ItemDetail } from "../lib/api";
@@ -163,6 +164,17 @@ export default function ItemDetailPage() {
           )}
         </div>
       </div>
+
+      {(item.kind === "movie" || item.kind === "show") && (
+        <Card className="mt-6 p-5">
+          <h2 className="mb-1 font-semibold">Backgrounds</h2>
+          <p className="mb-4 text-sm text-muted">
+            The background (fanart) behind the title on each server. Pick one, upload your own or find one on TMDb, and every server
+            gets it when you push; titles without a choice are left as they are.
+          </p>
+          <BackgroundChooser itemId={item.id} />
+        </Card>
+      )}
 
       {item.kind === "show" && item.seasons.length > 0 && (
         <Card className="mt-6 p-5">

@@ -55,6 +55,8 @@ class RemoteItem:
     season_number: int | None = None
     episode_number: int | None = None
     poster_ref: str | None = None
+    # The background (fanart) the server shows; same idea as poster_ref.
+    background_ref: str | None = None
     labels: list[str] = field(default_factory=list)
     # Media file (movies, episodes) or folder (shows) as the server sees it.
     path: str | None = None
@@ -234,6 +236,16 @@ class MediaServerClient(ABC):
 
         Returns the new poster ref, so the caller can tell later whether it changed again.
         """
+
+    @abstractmethod
+    async def fetch_background(
+        self, item_id: str, background_ref: str, max_width: int | None = None
+    ) -> bytes: ...
+
+    @abstractmethod
+    async def upload_background(self, item_id: str, data: bytes, content_type: str) -> str | None:
+        """Upload a background for a film or show and make it the one shown; returns the new
+        background ref."""
 
     @abstractmethod
     async def remove_from_collection(

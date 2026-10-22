@@ -35,7 +35,7 @@ export default function Layout({ username }: { username: string }) {
   const { data: libs } = useLibraries();
   const { active, dashboard } = useActiveJobs();
   const { data: changes } = useChangesSummary();
-  const pending = (changes?.titles ?? 0) + (changes?.collections ?? 0) + (changes?.problems ?? 0);
+  const pending = (changes?.titles ?? 0) + (changes?.collections ?? 0) + (changes?.problems ?? 0) + (changes?.backgrounds ?? 0);
   const openIssues = Object.values(dashboard?.issues ?? {}).reduce((a, b) => a + (b ?? 0), 0);
   const running = active.find((j) => j.status === "running") ?? active[0];
 

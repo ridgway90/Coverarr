@@ -149,6 +149,8 @@ class MediaItem(Base):
     episode_number: Mapped[int | None] = mapped_column(Integer)
     # Where the clean base poster comes from: "server:<id>", later also tmdb/upload/kometa.
     poster_source: Mapped[str | None] = mapped_column(String(100))
+    # The background (fanart) every server should show: "server:<id>" or "background:<id>".
+    background_source: Mapped[str | None] = mapped_column(String(100))
     # Resolution / HDR / DV / edition / network merged from every server (services/mediainfo).
     facts: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
@@ -197,6 +199,10 @@ class ServerItem(Base):
     # ("base:<source>" or the render key of an overlaid poster).
     pushed_ref: Mapped[str | None] = mapped_column(String(500))
     pushed_key: Mapped[str | None] = mapped_column(String(100))
+    # The same three for the background (Plex "art", Jellyfin/Emby's first backdrop).
+    background_ref: Mapped[str | None] = mapped_column(String(500))
+    background_pushed_ref: Mapped[str | None] = mapped_column(String(500))
+    background_pushed_key: Mapped[str | None] = mapped_column(String(100))
     # 16x24 greyscale thumbnail (hex) for telling overlays apart (services/posters.py).
     poster_edges: Mapped[str | None] = mapped_column(String(800))
     # Resolution / HDR / DV / edition / network as this server reports them (for overlays).
@@ -306,6 +312,23 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class Background(Base):
+    """A background (fanart) image Coverarr keeps for a film or show: an upload or one
+    picked from TMDb. Files live under ``<config>/assets/backgrounds``."""
+
+    __tablename__ = "backgrounds"
+    __table_args__ = (Index("ix_backgrounds_media", "media_item_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    media_item_id: Mapped[int] = mapped_column(ForeignKey("media_items.id", ondelete="CASCADE"))
+    source: Mapped[str] = mapped_column(String(20))  # upload | tmdb
+    file_path: Mapped[str] = mapped_column(String(1000))
+    original_name: Mapped[str | None] = mapped_column(String(500))
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class Artwork(Base):
