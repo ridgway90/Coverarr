@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import time
 from collections import defaultdict
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
@@ -439,7 +440,9 @@ async def compute_changes(
                 rows[r.media_item_id].append(r)
             arts = await _artworks(session, Artwork.media_item_id.in_(chosen))
             labels = await _labels_for(session, targets)
-            for t in targets:
+            for n, t in enumerate(targets):
+                if n % 2000 == 1999:
+                    await asyncio.sleep(0)  # let the API answer during a long pass
                 title, top = labels[t.id]
                 change = Change(
                     "item", t.id, title, t.kind, t.library_id, t.poster_source or "", top, None
@@ -497,6 +500,64 @@ async def compute_changes(
     return changes
 
 
+# --- the full list, cached ---------------------------------------------------------------------
+# Working out every pending change takes seconds on a big library with overlays, and the
+# Changes page, its summary and the library filters all ask for it. The full list is kept
+# until something could have changed it: any write through the API, or a job starting or
+# ending. While a job runs (e.g. a push), it's also redone every 30 seconds.
+
+_version = 0
+_jobs_running = 0
+_cached: tuple[int, float, list[Change]] | None = None
+BUSY_TTL = 30.0
+
+
+def changes_stale() -> None:
+    """Something that can change the pending list happened."""
+    global _version, _cached
+    _version += 1
+    _cached = None
+
+
+def job_started() -> None:
+    global _jobs_running
+    _jobs_running += 1
+    changes_stale()
+
+
+def job_finished() -> None:
+    global _jobs_running
+    _jobs_running = max(0, _jobs_running - 1)
+    changes_stale()
+
+
+async def pending_changes(
+    session: AsyncSession,
+    *,
+    library_id: int | None = None,
+    items: bool = True,
+    collections: bool = True,
+) -> list[Change]:
+    """``compute_changes`` for whole libraries, from the cached full list."""
+    global _cached
+    now = time.monotonic()
+    cached = _cached
+    if cached is None or cached[0] != _version or (_jobs_running and now - cached[1] > BUSY_TTL):
+        version = _version
+        full = await compute_changes(session)
+        if version == _version:  # nothing changed while it was worked out
+            _cached = (version, now, full)
+    else:
+        full = cached[2]
+    return [
+        c
+        for c in full
+        if (library_id is None or c.library_id == library_id)
+        and (items or c.target != "item")
+        and (collections or c.target != "collection")
+    ]
+
+
 async def _artworks(session: AsyncSession, owner_filter: Any) -> dict[int, Any]:
     rows = await session.execute(
         select(
@@ -512,7 +573,7 @@ async def _artworks(session: AsyncSession, owner_filter: Any) -> dict[int, Any]:
 
 
 async def changes_summary(session: AsyncSession) -> dict[str, int]:
-    changes = await compute_changes(session)
+    changes = await pending_changes(session)
     return {
         "titles": sum(1 for c in changes if c.target == "item" and not c.problem),
         "collections": sum(1 for c in changes if c.target == "collection" and not c.problem),

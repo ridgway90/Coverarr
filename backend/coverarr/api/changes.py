@@ -11,7 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.db import get_session
 from coverarr.models import Collection, MediaItem
-from coverarr.services.changes import changes_summary, compute_changes, library_names
+from coverarr.services.changes import (
+    changes_summary,
+    compute_changes,
+    library_names,
+    pending_changes,
+)
 from coverarr.services.review import refresh_issues
 
 router = APIRouter(prefix="/api/changes", tags=["changes"])
@@ -28,14 +33,22 @@ async def list_changes(
     page_size: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
 ):
-    changes = await compute_changes(
-        session,
-        library_id=library_id,
-        media_item_ids=[media_item_id] if media_item_id is not None else None,
-        collection_ids=[collection_id] if collection_id is not None else None,
-        items=target in (None, "item"),
-        collections=target in (None, "collection"),
-    )
+    if media_item_id is None and collection_id is None:
+        changes = await pending_changes(
+            session,
+            library_id=library_id,
+            items=target in (None, "item"),
+            collections=target in (None, "collection"),
+        )
+    else:
+        changes = await compute_changes(
+            session,
+            library_id=library_id,
+            media_item_ids=[media_item_id] if media_item_id is not None else None,
+            collection_ids=[collection_id] if collection_id is not None else None,
+            items=target in (None, "item"),
+            collections=target in (None, "collection"),
+        )
     if q:
         needle = q.strip().lower()
         changes = [c for c in changes if needle in c.title.lower()]

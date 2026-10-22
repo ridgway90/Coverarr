@@ -5,7 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -33,7 +33,7 @@ from coverarr.services import arr, cpu
 from coverarr.services.actions import run_collection_rename, run_collection_sync, run_fix_match
 from coverarr.services.artwork import run_poster_set, run_tmdb_reset
 from coverarr.services.assets import relocate_artwork
-from coverarr.services.changes import run_push_posters
+from coverarr.services.changes import changes_stale, run_push_posters
 from coverarr.services.client_pool import ClientPool
 from coverarr.services.definitions import run_check_definitions, run_sync_definitions
 from coverarr.services.housekeeping import run_store_bases, run_tidy_assets
@@ -109,6 +109,14 @@ def create_app(config: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Coverarr", version=__version__, lifespan=lifespan)
     app.state.config = config
+
+    @app.middleware("http")
+    async def note_writes(request: Request, call_next):
+        response = await call_next(request)
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            changes_stale()  # a choice, setting or upload may change what's pending
+        return response
+
     app.include_router(auth.router)
     app.include_router(automation.public)
     protected = [Depends(current_user)]

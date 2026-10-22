@@ -286,6 +286,7 @@ async def import_server(
             counts: dict[str, int] = {}
             for idx, (sl, remote) in enumerate(active):
                 fraction = 0.9 * idx / max(len(active), 1)
+                complete = True
                 for kind in KINDS_FOR_LIBRARY[sl.kind]:
                     n = 0
                     async for page in client.items(remote, kind):
@@ -296,12 +297,23 @@ async def import_server(
                         n += len(page)
                         await report(fraction, f"{server.name} / {sl.name}: {n} {kind}s")
                     counts[kind] = counts.get(kind, 0) + n
-                async with db_lock:
-                    await session.execute(
-                        delete(ServerItem).where(
-                            ServerItem.server_library_id == sl.id, ServerItem.seen_run != run_id
-                        )
+                    if client.listed_total is not None and n < client.listed_total:
+                        complete = False
+                if not complete:
+                    # Titles were added or removed mid-listing, or the server stopped early:
+                    # rows not seen this time may still exist, so keep them for now.
+                    await ctx.log(
+                        f"{server.name} / {sl.name}: the listing changed while importing; "
+                        "titles that seem gone are kept until the next import"
                     )
+                async with db_lock:
+                    if complete:
+                        await session.execute(
+                            delete(ServerItem).where(
+                                ServerItem.server_library_id == sl.id,
+                                ServerItem.seen_run != run_id,
+                            )
+                        )
                     if sl.kind == "show":
                         await fill_show_paths(session, sl.id)
                     await session.commit()

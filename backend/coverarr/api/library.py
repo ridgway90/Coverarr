@@ -23,7 +23,7 @@ from coverarr.models import (
     ServerItem,
     ServerLibrary,
 )
-from coverarr.services.changes import compute_changes
+from coverarr.services.changes import pending_changes
 
 router = APIRouter(prefix="/api", tags=["library"])
 
@@ -241,7 +241,7 @@ async def _filtered_items(
     if issues in ("any", "poster", "push"):
         # Titles whose chosen base poster isn't on every server yet. Their posters differ
         # too, but they're no longer review issues because the choice has been made.
-        changes = await compute_changes(session, library_id=lib.id, collections=False)
+        changes = await pending_changes(session, library_id=lib.id, collections=False)
         pending = {c.top_id for c in changes if c.top_id is not None}
     if issues:
         types = {

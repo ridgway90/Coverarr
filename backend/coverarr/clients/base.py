@@ -103,6 +103,8 @@ def to_int(value: Any) -> int | None:
 class MediaServerClient(ABC):
     kind: str
     page_size = 500
+    # How many rows the server said the last items() listing had (None: it didn't say).
+    listed_total: int | None = None
 
     def __init__(
         self,
