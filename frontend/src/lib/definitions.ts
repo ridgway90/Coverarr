@@ -60,7 +60,19 @@ export interface SourceType {
   kinds: Kind[];
   /** Charts take a number of titles rather than an id. */
   chart?: boolean;
+  /** A fixed set of values (e.g. which IMDb chart), shown as a menu. */
+  choices?: { value: string; label: string; kinds: Kind[] }[];
 }
+
+export const IMDB_CHARTS = [
+  { value: "top_movies", label: "Top 250 films", kinds: ["movie"] as Kind[] },
+  { value: "popular_movies", label: "Most popular films", kinds: ["movie"] as Kind[] },
+  { value: "top_english", label: "Top rated English-language films", kinds: ["movie"] as Kind[] },
+  { value: "box_office", label: "Box office", kinds: ["movie"] as Kind[] },
+  { value: "lowest_rated", label: "Lowest rated films", kinds: ["movie"] as Kind[] },
+  { value: "top_shows", label: "Top 250 shows", kinds: ["show"] as Kind[] },
+  { value: "popular_shows", label: "Most popular shows", kinds: ["show"] as Kind[] },
+];
 
 export const SOURCE_TYPES: SourceType[] = [
   { type: "tmdb_list", label: "TMDb list", hint: "List id or URL", kinds: ["movie", "show"] },
@@ -81,6 +93,9 @@ export const SOURCE_TYPES: SourceType[] = [
   { type: "trakt_anticipated", label: "Trakt anticipated", hint: "How many titles", kinds: ["movie", "show"], chart: true },
   { type: "trakt_watched_weekly", label: "Trakt most watched this week", hint: "How many titles", kinds: ["movie", "show"], chart: true },
   { type: "trakt_boxoffice", label: "Trakt box office", hint: "How many titles", kinds: ["movie"], chart: true },
+  { type: "imdb_chart", label: "IMDb chart", hint: "Which chart", kinds: ["movie", "show"], choices: IMDB_CHARTS },
+  { type: "imdb_list", label: "IMDb list", hint: "https://www.imdb.com/list/ls…", kinds: ["movie", "show"] },
+  { type: "imdb_id", label: "IMDb title", hint: "tt… id or URL", kinds: ["movie", "show"] },
 ];
 
 export const SOURCE_BY_TYPE = new Map(SOURCE_TYPES.map((s) => [s.type, s]));
@@ -96,6 +111,13 @@ export function builderLink(b: Builder): { label: string; href?: string } {
   if (b.type === "tmdb_collection") return { label: `TMDb collection ${b.value}`, href: `https://www.themoviedb.org/collection/${b.value}` };
   if (b.type === "tmdb_movie") return { label: `TMDb film ${b.value}`, href: `https://www.themoviedb.org/movie/${b.value}` };
   if (b.type === "tmdb_show") return { label: `TMDb show ${b.value}`, href: `https://www.themoviedb.org/tv/${b.value}` };
+  if (b.type === "imdb_chart") {
+    const chart = IMDB_CHARTS.find((c) => c.value === b.value);
+    const path = { top_movies: "top", popular_movies: "moviemeter", top_english: "top-english-movies", box_office: "boxoffice", lowest_rated: "bottom", top_shows: "toptv", popular_shows: "tvmeter" }[b.value];
+    return { label: `IMDb ${chart?.label.toLowerCase() ?? b.value}`, href: path ? `https://www.imdb.com/chart/${path}/` : undefined };
+  }
+  if (b.type === "imdb_list") return { label: `IMDb list ${b.value}`, href: `https://www.imdb.com/list/${b.value}/` };
+  if (b.type === "imdb_id") return { label: `IMDb ${b.value}`, href: `https://www.imdb.com/title/${b.value}/` };
   if (b.type === "trakt_list") return { label: `Trakt ${b.value.replace(/^https?:\/\/(www\.)?trakt\.tv\//, "")}`, href: b.value };
   return { label: `${b.type}: ${b.value}` };
 }

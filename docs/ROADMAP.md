@@ -51,7 +51,7 @@ Plex, Jellyfin and Emby, doing only the work that a change actually requires.
 - [x] Collection posters with overrides (TMDb's poster for new TMDb collections); created
   everywhere automatically
 - [x] Labels on collections and their titles (Kometa's `label` / `item_label`)
-- IMDb charts (no API)
+- [x] IMDb charts, lists and titles (read from IMDb's pages, as there's no API)
 
 ## Later / nice to have
 
