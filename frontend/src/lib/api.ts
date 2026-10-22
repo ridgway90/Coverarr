@@ -236,6 +236,8 @@ export interface ChangesSummary {
   collections: number;
   uploads: number;
   problems: number;
+  backgrounds: number;
+  background_uploads: number;
 }
 
 export interface Issue {

@@ -136,6 +136,12 @@ possible: it tracks what each server already has and only touches what actually 
     *Add several images* guesses each file's slot from its name ("4K Dolby Vision.png") for
     you to check. Empty slots borrow a simpler badge (4K DV + HDR falls back to 4K DV, then
     4K). The SD badges cover 576p and 480p.
+- **Backgrounds** (a film or show → Backgrounds): the background (fanart) each server shows,
+  side by side. Pick one server's, upload your own or take one from TMDb (textless first), and
+  *Changes* pushes it to every other server (Plex's art, Jellyfin/Emby's first backdrop).
+  Coverarr remembers what it pushed, so a server whose background is changed again is listed
+  once more; titles without a chosen background are left alone. Your own backgrounds are kept
+  in `/config/assets/backgrounds`.
 - **Housekeeping** (sidebar → Housekeeping), for making Coverarr the source of truth:
   - *Without a base*: a suggested base for every film, show, season and collection that has
     none, with its reasons and a confidence (like the mismatch suggestions). It's the artwork

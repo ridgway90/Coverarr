@@ -66,7 +66,14 @@ async def test_push_server_poster(app, authed, fake_servers):
     ]
     assert change["base"]["server_id"] == ids["jellyfin"]
     summary = (await client.get("/api/changes/summary")).json()
-    assert summary == {"titles": 1, "collections": 0, "uploads": 1, "problems": 0}
+    assert summary == {
+        "titles": 1,
+        "collections": 0,
+        "uploads": 1,
+        "problems": 0,
+        "backgrounds": 0,
+        "background_uploads": 0,
+    }
     # The library filters still find it, though it's no longer a review issue.
     assert await _titles(client, films["id"], "push") == ["Arrival"]
     assert await _titles(client, films["id"], "poster") == ["Arrival"]

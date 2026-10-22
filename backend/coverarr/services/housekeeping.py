@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from coverarr.clients import MediaServerError, client_for
 from coverarr.models import (
     Artwork,
+    Background,
     Collection,
     Library,
     MediaItem,
@@ -582,6 +583,7 @@ async def run_tidy_assets(ctx: JobContext) -> dict[str, Any]:
     # 4. Files nothing refers to (old posters, leftovers of deleted titles).
     async with sm() as session:
         known = {p for (p,) in (await session.execute(select(Artwork.file_path))).all()}
+        known |= {p for (p,) in (await session.execute(select(Background.file_path))).all()}
 
     def walk() -> list[Path]:
         if not root.is_dir():
@@ -600,6 +602,7 @@ async def run_tidy_assets(ctx: JobContext) -> dict[str, Any]:
         # Uploads saved during the walk weren't in ``known`` yet: ask again before deleting.
         async with sm() as session:
             known |= {p for (p,) in (await session.execute(select(Artwork.file_path))).all()}
+            known |= {p for (p,) in (await session.execute(select(Background.file_path))).all()}
     for path in found:
         rel = str(path.relative_to(config_dir))
         if rel not in known:

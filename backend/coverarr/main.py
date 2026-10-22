@@ -14,6 +14,7 @@ from coverarr.api import (
     artwork,
     auth,
     automation,
+    backgrounds,
     changes,
     definitions,
     housekeeping,
@@ -121,6 +122,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
     app.include_router(automation.public)
     protected = [Depends(current_user)]
     for module in (
+        backgrounds,
         servers,
         settings,
         library,

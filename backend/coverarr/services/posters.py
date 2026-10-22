@@ -252,6 +252,15 @@ class ThumbnailCache:
         await asyncio.to_thread(self._store, path, data, width)
         return path
 
+    async def get_background(self, server: Server, remote_id: str, ref: str, width: int) -> Path:
+        path = self.path_for(server.id, f"bg-{remote_id}", ref, width)
+        if path.exists():
+            return path
+        client = await self.pool.get(server)
+        data = await client.fetch_background(remote_id, ref, max_width=width)
+        await asyncio.to_thread(self._store, path, data, width)
+        return path
+
     async def get_local(self, key: str, source: Path, width: int) -> Path:
         """A resized copy of an image Coverarr holds itself (e.g. a Kometa original)."""
         stat = await asyncio.to_thread(source.stat)

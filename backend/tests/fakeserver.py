@@ -117,6 +117,8 @@ class Item:
     alt_art: bool = False
     file: str | None = None  # media file (movie/episode) or folder (show)
     uploaded: bytes | None = None  # a poster uploaded through the API
+    bg_version: int = 1  # films and shows have a background (fanart)
+    bg_uploaded: bytes | None = None
     # Video facts: resolution ("4k", "1080"...), hdr, dv, edition; network for shows.
     video: dict[str, Any] = field(default_factory=dict)
 
@@ -199,6 +201,31 @@ class FakeServer:
         target.art_version += 1
         if isinstance(target, Item):
             target.overlay = False
+
+    def upload_background(self, item_id: str, data: bytes) -> None:
+        item = self.items.get(item_id)
+        if item is None or item.kind not in ("movie", "show"):
+            raise HTTPException(404)
+        Image.open(io.BytesIO(data)).verify()
+        item.bg_uploaded = data
+        item.bg_version += 1
+
+    def background(self, item_id: str, width: int | None) -> bytes:
+        item = self.items.get(item_id)
+        if item is None or item.kind not in ("movie", "show"):
+            raise HTTPException(404)
+        if item.bg_uploaded:
+            img = Image.open(io.BytesIO(item.bg_uploaded)).convert("RGB")
+        else:
+            img = Image.open(io.BytesIO(poster_png(f"bg:{item.art_seed}", width=320))).convert(
+                "RGB"
+            )
+            img = img.resize((640, 360))
+        if width:
+            img = img.resize((width, width * img.height // img.width))
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return buf.getvalue()
 
     def image(self, item_id: str, width: int | None) -> bytes:
         target = self.collections.get(item_id) or self.items.get(item_id)
@@ -393,6 +420,8 @@ def plex_router(srv: FakeServer) -> APIRouter:
             "librarySectionID": item.library,
             "thumb": f"/library/metadata/{item.id}/thumb/{1700000000 + item.art_version}",
         }
+        if item.kind in ("movie", "show"):
+            out["art"] = f"/library/metadata/{item.id}/art/{1700000000 + item.bg_version}"
         if item.year:
             out["year"] = item.year
         if item.kind in ("movie", "show"):
@@ -641,6 +670,17 @@ def plex_router(srv: FakeServer) -> APIRouter:
         coll.members.insert(coll.members.index(after) + 1 if after else 0, rk)
         return {}
 
+    @r.post("/library/metadata/{rk}/arts")
+    async def upload_art(rk: str, request: Request):
+        auth(request)
+        srv.upload_background(rk, await request.body())
+        return {}
+
+    @r.get("/library/metadata/{rk}/art/{ts}")
+    async def art(rk: str, ts: str, request: Request):
+        auth(request)
+        return Response(srv.background(rk, None), media_type="image/png")
+
     @r.get("/library/metadata/{rk}/thumb/{ts}")
     async def thumb(rk: str, ts: str, request: Request):
         auth(request)
@@ -649,10 +689,10 @@ def plex_router(srv: FakeServer) -> APIRouter:
     @r.get("/photo/:/transcode")
     async def transcode(request: Request):
         auth(request)
-        rk = request.query_params["url"].split("/")[3]
-        return Response(
-            srv.image(rk, int(request.query_params.get("width", 300))), media_type="image/png"
-        )
+        url = request.query_params["url"]
+        rk, width = url.split("/")[3], int(request.query_params.get("width", 300))
+        image = srv.background(rk, width) if "/art/" in url else srv.image(rk, width)
+        return Response(image, media_type="image/png")
 
     def uri_ids(uri: str) -> list[str]:
         assert uri.startswith(
@@ -707,6 +747,8 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
             "SortName": item.title.lower(),
             "ImageTags": {"Primary": tag(item.art_version, item.id)},
         }
+        if item.kind in ("movie", "show"):
+            out["BackdropImageTags"] = [tag(f"bg{item.bg_version}", item.id)]
         if item.year:
             out["ProductionYear"] = item.year
         if item.file:
@@ -810,6 +852,20 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
         auth(request)
         srv.upload(item_id, base64.b64decode(await request.body(), validate=True))
         return Response(status_code=204)
+
+    @r.post("/Items/{item_id}/Images/Backdrop/0")
+    async def upload_backdrop(item_id: str, request: Request):
+        auth(request)
+        srv.upload_background(item_id, base64.b64decode(await request.body(), validate=True))
+        return Response(status_code=204)
+
+    @r.get("/Items/{item_id}/Images/Backdrop/0")
+    async def backdrop(item_id: str, request: Request):
+        auth(request)
+        width = request.query_params.get("maxWidth")
+        return Response(
+            srv.background(item_id, int(width) if width else None), media_type="image/png"
+        )
 
     @r.get("/Items/{item_id}/Images/Primary")
     async def image(item_id: str, request: Request):

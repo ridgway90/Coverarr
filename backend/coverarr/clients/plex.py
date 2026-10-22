@@ -255,6 +255,7 @@ class PlexClient(MediaServerClient):
     ) -> RemoteItem:
         rating_key = str(meta["ratingKey"])
         labels = _tags(meta, "Label")
+        background = meta.get("art") if kind in ("movie", "show") else None
         if rating_key in overlay_ids and "Overlay" not in labels:
             labels.append("Overlay")
         item = RemoteItem(
@@ -264,6 +265,7 @@ class PlexClient(MediaServerClient):
             sort_title=meta.get("titleSort"),
             year=to_int(meta.get("year")),
             poster_ref=meta.get("thumb"),
+            background_ref=background,
             labels=labels,
         )
         item.path = _media_path(meta)
@@ -363,6 +365,29 @@ class PlexClient(MediaServerClient):
             path = poster_ref
         resp = await self._request("GET", path, headers={"Accept": "image/*"})
         return resp.content
+
+    async def fetch_background(
+        self, item_id: str, background_ref: str, max_width: int | None = None
+    ) -> bytes:
+        path = background_ref
+        if max_width:
+            path = (
+                f"/photo/:/transcode?width={max_width}&height={max_width * 9 // 16}"
+                f"&minSize=1&upscale=1&url={quote(background_ref, safe='')}"
+            )
+        resp = await self._request("GET", path, headers={"Accept": "image/*"})
+        return resp.content
+
+    async def upload_background(self, item_id: str, data: bytes, content_type: str) -> str | None:
+        # Like posters, Plex selects (and locks) an uploaded background straight away.
+        await self._request(
+            "POST",
+            f"/library/metadata/{item_id}/arts",
+            content=data,
+            headers={"Content-Type": content_type},
+        )
+        container = await self._container(f"/library/metadata/{item_id}")
+        return ((container.get("Metadata") or [{}])[0]).get("art")
 
     async def _metadata_uri(self, ids: list[str]) -> str:
         machine = await self.machine_id()

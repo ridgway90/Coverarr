@@ -96,9 +96,17 @@ export default function ChangesPage() {
   });
 
   const total = (summary.data?.titles ?? 0) + (summary.data?.collections ?? 0);
-  const uploads = summary.data?.uploads ?? 0;
+  const posterUploads = summary.data?.uploads ?? 0;
+  const backgroundUploads = summary.data?.background_uploads ?? 0;
+  const uploads = posterUploads + backgroundUploads;
   const pushAll = () => {
-    if (confirm(`Upload ${uploads.toLocaleString()} poster${uploads === 1 ? "" : "s"} to your servers?`)) push.run({});
+    const what = [
+      posterUploads && `${posterUploads.toLocaleString()} poster${posterUploads === 1 ? "" : "s"}`,
+      backgroundUploads && `${backgroundUploads.toLocaleString()} background${backgroundUploads === 1 ? "" : "s"}`,
+    ]
+      .filter(Boolean)
+      .join(" and ");
+    if (confirm(`Upload ${what} to your servers?`)) push.run({});
   };
   const job = push.job;
   const overlays = data?.items.some((c) => c.servers.some((s) => s.reason === "has Kometa overlays"));
@@ -107,7 +115,7 @@ export default function ChangesPage() {
     <>
       <PageHeader
         title="Changes"
-        subtitle="Posters you've chosen that aren't on every server yet. Nothing is uploaded until you push."
+        subtitle="Posters and backgrounds you've chosen that aren't on every server yet. Nothing is uploaded until you push."
         actions={
           <Button variant="primary" icon={<Upload className="size-4" />} loading={push.running} disabled={!uploads} onClick={pushAll}>
             Push all{uploads ? ` (${uploads.toLocaleString()})` : ""}
@@ -142,7 +150,10 @@ export default function ChangesPage() {
             : job.status === "cancelled"
             ? "Push cancelled. Posters already uploaded are kept; the rest are still listed below."
             : `Uploaded ${Number(job.result?.uploaded ?? 0).toLocaleString()} posters` +
-              (job.result?.failed ? `; ${job.result.failed} failed (see Activity)` : ".")}
+              (job.result?.backgrounds ? ` and ${Number(job.result.backgrounds).toLocaleString()} backgrounds` : "") +
+              (job.result?.failed || job.result?.backgrounds_failed
+                ? `; ${Number(job.result?.failed ?? 0) + Number(job.result?.backgrounds_failed ?? 0)} failed (see Activity)`
+                : ".")}
         </div>
       )}
       {overlays && (
@@ -181,10 +192,12 @@ export default function ChangesPage() {
         </select>
       </div>
 
+      <BackgroundChanges libraryId={libraryId} pushing={push.running} onPush={(id) => push.run({ media_item_ids: [id] })} />
+
       {isLoading ? (
         <Spinner />
       ) : !data?.items.length ? (
-        <EmptyState icon={<CheckCircle2 className="size-8" />} title={total ? "Nothing matches these filters" : "Everything is up to date"}>
+        <EmptyState icon={<CheckCircle2 className="size-8" />} title={total ? "Nothing matches these filters" : summary.data?.backgrounds ? "No posters to push" : "Everything is up to date"}>
           {total
             ? "Clear the filters to see every pending change."
             : "Choose a base poster on a title or collection (or import Kometa originals) and it will show up here."}
@@ -261,5 +274,58 @@ export default function ChangesPage() {
         </Card>
       )}
     </>
+  );
+}
+
+interface BackgroundChange {
+  id: number;
+  title: string;
+  kind: "movie" | "show";
+  library: string | null;
+  source: string;
+  problem: string | null;
+  servers: { server_id: number; reason: string }[];
+}
+
+/** Chosen backgrounds that some server doesn't show yet. */
+function BackgroundChanges({ libraryId, pushing, onPush }: { libraryId: string; pushing: boolean; onPush: (id: number) => void }) {
+  const servers = useServerMap();
+  const { data } = useQuery({
+    queryKey: ["changes", "backgrounds", libraryId],
+    queryFn: () => api.get<{ total: number; items: BackgroundChange[] }>(`/api/changes/backgrounds${qs({ library_id: libraryId })}`),
+  });
+  if (!data?.total) return null;
+  return (
+    <Card className="mb-5">
+      <h2 className="border-b border-line px-4 py-3 text-sm font-semibold">
+        Backgrounds <span className="font-normal text-muted">({data.total})</span>
+      </h2>
+      <ul className="divide-y divide-line">
+        {data.items.map((c) => (
+          <li key={c.id} className="flex flex-wrap items-center gap-4 px-4 py-3">
+            <div className="min-w-48 flex-1">
+              <Link to={`/items/${c.id}`} className="font-medium hover:text-accent">
+                {c.title}
+              </Link>
+              <div className="mt-0.5 text-xs text-muted">
+                {KIND[c.kind]}
+                {c.library ? ` · ${c.library}` : ""}
+                {c.source.startsWith("server:") ? ` · from ${servers.get(Number(c.source.split(":")[1]))?.name ?? "a server"}` : " · your background"}
+              </div>
+              {c.problem ? (
+                <div className="mt-1 text-xs text-danger">{c.problem}</div>
+              ) : (
+                <div className="mt-1 text-xs text-muted">{c.servers.map((s) => `${servers.get(s.server_id)?.name ?? "Server"}: ${s.reason}`).join(" · ")}</div>
+              )}
+            </div>
+            {!c.problem && (
+              <Button size="sm" icon={<Upload className="size-3.5" />} disabled={pushing} onClick={() => onPush(c.id)}>
+                Push
+              </Button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }
