@@ -3,7 +3,7 @@ import { AlertTriangle, ArrowDown, ArrowUp, FileUp, Layers, Plus, RotateCcw, Sav
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import OverlayImages, { SortResults, type SortReport } from "../components/OverlayImages";
-import { Button, Card, ErrorNote, PageHeader, Spinner, Tabs, cx, inputClass, selectClass, useDebounced } from "../components/ui";
+import { Button, Card, ErrorNote, PageHeader, Spinner, Tabs, cx, fieldBase, inputClass, selectClass, useDebounced } from "../components/ui";
 import { api, qs, uploadWithProgress, type LayerType, type OverlayLayer, type OverlayLibrary, type OverlayPack } from "../lib/api";
 
 interface OverlaysData {
@@ -18,8 +18,23 @@ const TYPE_LABEL: Record<LayerType, string> = {
   resolution: "Resolution badge",
   edition: "Edition",
   network: "Network logo",
+  text: "Text",
 };
 const NEW_LAYER: Record<LayerType, OverlayLayer> = {
+  text: {
+    type: "text",
+    enabled: true,
+    template: "S{season:02}E{episode:02}  {title}",
+    font: null,
+    h_align: "left",
+    v_align: "bottom",
+    h_offset: 60,
+    v_offset: 60,
+    size: 70,
+    color: "#FFFFFF",
+    stroke_width: 2,
+    stroke_color: "#000000",
+  },
   image: { type: "image", enabled: true, file: "gradient.png" },
   resolution: { type: "resolution", enabled: true, folder: "resolution", h_align: "left", v_align: "top", h_offset: 50, v_offset: 50, scale: 1 },
   edition: { type: "edition", enabled: true, folder: "edition", h_align: "center", v_align: "bottom", h_offset: 0, v_offset: 40, scale: 1 },
@@ -57,7 +72,7 @@ export default function OverlaysPage() {
           )}
           <PackCard pack={data.pack} />
           <OverlayImages />
-          {data.pack && data.libraries.map((lib) => <LibraryCard key={lib.id} library={lib} />)}
+          {data.pack && data.libraries.map((lib) => <LibraryCard key={lib.id} library={lib} fonts={data.pack?.fonts ?? []} />)}
         </div>
       )}
     </>
@@ -147,7 +162,7 @@ function PackCard({ pack }: { pack: OverlayPack | null }) {
   );
 }
 
-function LibraryCard({ library }: { library: OverlayLibrary }) {
+function LibraryCard({ library, fonts }: { library: OverlayLibrary; fonts: string[] }) {
   const qc = useQueryClient();
   const levels = Object.keys(library.levels);
   const [level, setLevel] = useState(levels[0]);
@@ -224,12 +239,21 @@ function LibraryCard({ library }: { library: OverlayLibrary }) {
                   <input type="checkbox" checked={layer.enabled} onChange={(e) => update(i, { enabled: e.target.checked })} />
                   {TYPE_LABEL[layer.type]}
                 </label>
-                <input
-                  className={inputClass + " h-8 max-w-xs flex-1 text-xs"}
-                  value={layer.type === "image" ? layer.file ?? "" : layer.folder ?? ""}
-                  onChange={(e) => update(i, layer.type === "image" ? { file: e.target.value } : { folder: e.target.value })}
-                  title={layer.type === "image" ? "Image file in the pack" : "Folder in the pack"}
-                />
+                {layer.type === "text" ? (
+                  <input
+                    className={inputClass + " h-8 max-w-md flex-1 text-xs"}
+                    value={layer.template ?? ""}
+                    onChange={(e) => update(i, { template: e.target.value })}
+                    title="The text: {title}, {show}, {season}, {episode} and {year} are filled in; {season:02} pads to two digits"
+                  />
+                ) : (
+                  <input
+                    className={inputClass + " h-8 max-w-xs flex-1 text-xs"}
+                    value={layer.type === "image" ? layer.file ?? "" : layer.folder ?? ""}
+                    onChange={(e) => update(i, layer.type === "image" ? { file: e.target.value } : { folder: e.target.value })}
+                    title={layer.type === "image" ? "Image file in the pack" : "Folder in the pack"}
+                  />
+                )}
                 <div className="ml-auto flex gap-1 text-muted">
                   <button className="hover:text-text disabled:opacity-30" disabled={i === 0} onClick={() => move(i, -1)} aria-label="Move up">
                     <ArrowUp className="size-4" />
@@ -261,7 +285,11 @@ function LibraryCard({ library }: { library: OverlayLibrary }) {
                   </select>
                   <NumberField label="x" value={layer.h_offset ?? 0} onChange={(v) => update(i, { h_offset: v })} />
                   <NumberField label="y" value={layer.v_offset ?? 0} onChange={(v) => update(i, { v_offset: v })} />
-                  <NumberField label="scale" value={layer.scale ?? 1} step={0.05} onChange={(v) => update(i, { scale: v })} />
+                  {layer.type === "text" ? (
+                    <TextStyle layer={layer} fonts={fonts} onChange={(patch) => update(i, patch)} />
+                  ) : (
+                    <NumberField label="scale" value={layer.scale ?? 1} step={0.05} onChange={(v) => update(i, { scale: v })} />
+                  )}
                 </div>
               )}
             </div>
@@ -276,12 +304,70 @@ function LibraryCard({ library }: { library: OverlayLibrary }) {
           <p className="pt-2 text-xs text-muted">
             Layers are drawn top to bottom of this list. Positions are in pixels on a {level === "episode" ? "1920×1080" : "1000×1500"}{" "}
             image, measured in from the edge you align to. Badges pick their image by name:{" "}
-            <code>resolution/4kdvhdr.png</code>, <code>edition/directors.png</code>, <code>…/Channel 4.png</code>.
+            <code>resolution/4kdvhdr.png</code>, <code>edition/directors.png</code>, <code>…/Channel 4.png</code>. Text fills in{" "}
+            <code>{"{title}"}</code>, <code>{"{show}"}</code>, <code>{"{season}"}</code>, <code>{"{episode}"}</code> and{" "}
+            <code>{"{year}"}</code> (<code>{"{episode:02}"}</code> gives 03), and shrinks to fit the width; on episodes it makes title
+            cards.
           </p>
         </div>
         <Preview libraryId={library.id} level={level} layers={layers} />
       </div>
     </Card>
+  );
+}
+
+/** Font, size, colour and outline of a text layer. */
+function TextStyle({ layer, fonts, onChange }: { layer: OverlayLayer; fonts: string[]; onChange: (patch: Partial<OverlayLayer>) => void }) {
+  const qc = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<unknown>(null);
+  const addFont = async (file: File) => {
+    setError(null);
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const { path } = await uploadWithProgress<{ path: string }>("/api/overlays/fonts", form, () => {});
+      await qc.invalidateQueries({ queryKey: ["overlays"] });
+      onChange({ font: path });
+    } catch (err) {
+      setError(err);
+    } finally {
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+  return (
+    <>
+      <NumberField label="size" value={layer.size ?? 70} onChange={(v) => onChange({ size: v })} />
+      <label className="flex items-center gap-1" title="Text colour">
+        colour
+        <input type="color" className="h-8 w-9 rounded border border-line bg-transparent" value={(layer.color ?? "#FFFFFF").slice(0, 7)} onChange={(e) => onChange({ color: e.target.value.toUpperCase() })} />
+      </label>
+      <NumberField label="outline" value={layer.stroke_width ?? 0} onChange={(v) => onChange({ stroke_width: v })} />
+      <input
+        type="color"
+        title="Outline colour"
+        className="h-8 w-9 rounded border border-line bg-transparent"
+        value={(layer.stroke_color ?? "#000000").slice(0, 7)}
+        onChange={(e) => onChange({ stroke_color: e.target.value.toUpperCase() })}
+      />
+      <select
+        className={selectClass + " h-8 max-w-48 text-xs"}
+        value={layer.font ?? ""}
+        onChange={(e) => (e.target.value === "+" ? fileRef.current?.click() : onChange({ font: e.target.value || null }))}
+        title="Font"
+      >
+        <option value="">Built-in font</option>
+        {fonts.map((f) => (
+          <option key={f} value={f}>
+            {f.split("/").pop()}
+          </option>
+        ))}
+        {layer.font && !fonts.includes(layer.font) && <option value={layer.font}>{layer.font} (missing)</option>}
+        <option value="+">Upload a font…</option>
+      </select>
+      <input ref={fileRef} type="file" accept=".ttf,.otf" className="hidden" onChange={(e) => e.target.files?.[0] && addFont(e.target.files[0])} />
+      {Boolean(error) && <span className="w-full text-danger">{error instanceof Error ? error.message : String(error)}</span>}
+    </>
   );
 }
 
@@ -292,7 +378,7 @@ function NumberField({ label, value, step = 1, onChange }: { label: string; valu
       <input
         type="number"
         step={step}
-        className={inputClass + " h-8 w-20 text-xs"}
+        className={fieldBase + " h-8 w-20 text-xs"}
         value={value}
         onChange={(e) => e.target.value !== "" && onChange(Number(e.target.value))}
       />

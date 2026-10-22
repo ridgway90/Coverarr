@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+import re
 import shutil
 import uuid
 import zipfile
@@ -26,6 +27,7 @@ from coverarr.services import cpu, overlay_slots
 from coverarr.services.changes import plan_item
 from coverarr.services.mediainfo import RANK
 from coverarr.services.overlays import (
+    FONT_SUFFIXES,
     LEVELS,
     OverlayError,
     _safe_rel,
@@ -119,15 +121,61 @@ async def reset_library(library_id: int, session: AsyncSession = Depends(get_ses
 
 
 def _merge_into(incoming: Path, root: Path) -> list[str]:
-    """Move every file of an unpacked zip into the current pack (same relative paths)."""
+    """Move every file of an unpacked zip into the current pack (same relative paths);
+    returns the images among them."""
+    images = set(overlay_slots.pack_images(incoming))
     moved = []
-    for rel in overlay_slots.pack_images(incoming):
+    for path in sorted(p for p in incoming.rglob("*") if p.is_file()):
+        rel = str(path.relative_to(incoming)).replace("\\", "/")
         dest = root / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(incoming / rel, dest)
-        moved.append(rel)
+        os.replace(path, dest)
+        if rel in images:
+            moved.append(rel)
     shutil.rmtree(incoming, ignore_errors=True)
     return moved
+
+
+MAX_FONT_BYTES = 20 * 1024 * 1024
+
+
+def _save_font(root: Path, name: str, data: bytes) -> str:
+    from PIL import ImageFont
+
+    try:
+        ImageFont.truetype(io.BytesIO(data), 20)
+    except OSError as exc:
+        raise OverlayError("That isn't a font Coverarr can read") from exc
+    dest = root / "fonts" / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+    return f"fonts/{name}"
+
+
+@router.post("/fonts")
+async def upload_font(
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    session: AsyncSession = Depends(get_session),
+):
+    """Add a .ttf/.otf font to the pack, for text layers."""
+    name = re.sub(r"[^A-Za-z0-9._ -]", "", Path(file.filename or "").name).strip(" .")
+    if Path(name).suffix.lower() not in FONT_SUFFIXES:
+        raise HTTPException(422, "Upload a .ttf or .otf font")
+    config, root, _ = await _slot_context(request, session)
+    if root is None:
+        config["pack"] = "custom"
+        root = pack_dir(_config_dir(request), "custom")
+        await save_config(session, config)
+        await session.commit()
+    data = await file.read(MAX_FONT_BYTES + 1)
+    if len(data) > MAX_FONT_BYTES:
+        raise HTTPException(422, "That font is larger than 20 MB")
+    try:
+        path = await asyncio.to_thread(_save_font, root, name, data)
+    except OverlayError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"path": path}
 
 
 @router.post("/pack")

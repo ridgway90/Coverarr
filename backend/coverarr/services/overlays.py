@@ -33,7 +33,7 @@ from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coverarr.services.mediainfo import edition_key, resolution_key
@@ -47,7 +47,10 @@ POSTER = (1000, 1500)
 LANDSCAPE = (1920, 1080)
 CANVAS = {"movie": POSTER, "show": POSTER, "season": POSTER, "episode": LANDSCAPE}
 LEVELS = {"movie": ["movie"], "show": ["show", "season", "episode"]}
-LAYER_TYPES = ("image", "resolution", "edition", "network")
+LAYER_TYPES = ("image", "resolution", "edition", "network", "text")
+# What a text layer's template can show, e.g. "S{season:02}E{episode:02} {title}".
+TEXT_FIELDS = ("title", "show", "season", "episode", "year")
+FONT_SUFFIXES = (".ttf", ".otf")
 ALIGN_H = ("left", "center", "right")
 ALIGN_V = ("top", "center", "bottom")
 MAX_PACK_BYTES = 500 * 1024 * 1024
@@ -83,9 +86,22 @@ class OverlaySetup:
     # Titles with the same layers and the same facts share a plan (most of a library does).
     _plans: dict[tuple, RenderPlan] = field(default_factory=dict)
 
-    def plan(self, level: str, layers: list[dict], facts: dict[str, Any] | None) -> RenderPlan:
+    def plan(
+        self,
+        level: str,
+        layers: list[dict],
+        facts: dict[str, Any] | None,
+        info: dict[str, Any] | None = None,
+    ) -> RenderPlan:
         f = facts or {}
+        # Text (e.g. an episode's title) makes a plan particular to the title.
+        texts = (
+            tuple(sorted((info or {}).items()))
+            if any(layer["type"] == "text" for layer in layers)
+            else None
+        )
         key = (
+            texts,
             level,
             id(layers),
             # The names a badge is looked up by, not just the key: two titles with one key
@@ -96,7 +112,7 @@ class OverlaySetup:
         )
         plan = self._plans.get(key)
         if plan is None:
-            plan = self._plans[key] = build_plan(self.root, level, layers, facts)
+            plan = self._plans[key] = build_plan(self.root, level, layers, facts, info)
         return plan
 
     def layers_for(self, library_id: int | None, kind: str) -> list[dict] | None:
@@ -147,6 +163,24 @@ def _badge(kind: str, folder: str, h: str, v: str, enabled: bool = True, **extra
     }
 
 
+def _text(template: str, h: str, v: str, enabled: bool = True) -> dict:
+    """A title-card line, e.g. the episode number and title along the bottom."""
+    return {
+        "type": "text",
+        "template": template,
+        "font": None,
+        "enabled": enabled,
+        "h_align": h,
+        "v_align": v,
+        "h_offset": 60,
+        "v_offset": 60,
+        "size": 70,
+        "color": "#FFFFFF",
+        "stroke_width": 2,
+        "stroke_color": "#000000",
+    }
+
+
 def _image(file: str, enabled: bool = True) -> dict:
     return {"type": "image", "file": file, "enabled": enabled}
 
@@ -159,6 +193,7 @@ def default_layers(level: str) -> list[dict]:
             _image("gradient_episode_top.png"),
             _image("gradient_episode_bottom.png"),
             _badge("resolution", "resolution", "left", "top"),
+            _text("S{season:02}E{episode:02}  {title}", "left", "bottom", enabled=False),
         ]
     layers = [
         _image("gradient_top.png"),
@@ -190,7 +225,10 @@ def clean_layers(layers: Any) -> list[dict]:
         if raw["type"] == "image":
             layer["file"] = _safe_rel(raw.get("file"))
         else:
-            layer["folder"] = _safe_rel(raw.get("folder"))
+            if raw["type"] == "text":
+                layer.update(_clean_text(raw))
+            else:
+                layer["folder"] = _safe_rel(raw.get("folder"))
             layer["h_align"] = raw.get("h_align") if raw.get("h_align") in ALIGN_H else "left"
             layer["v_align"] = raw.get("v_align") if raw.get("v_align") in ALIGN_V else "top"
             for key in ("h_offset", "v_offset"):
@@ -204,6 +242,52 @@ def clean_layers(layers: Any) -> list[dict]:
                 raise OverlayError("scale must be a number") from exc
         out.append(layer)
     return out
+
+
+_COLOR = re.compile(r"#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})")
+
+
+def _clean_text(raw: dict) -> dict[str, Any]:
+    template = str(raw.get("template") or "").strip()
+    if not template or len(template) > 200:
+        raise OverlayError("A text layer needs its text (at most 200 characters)")
+    font = str(raw.get("font") or "").strip()
+    if font:
+        font = _safe_rel(font)
+        if PurePosixPath(font).suffix.lower() not in FONT_SUFFIXES:
+            raise OverlayError("The font must be a .ttf or .otf file in the pack")
+    out: dict[str, Any] = {"template": template, "font": font or None}
+    for key, default in (("color", "#FFFFFF"), ("stroke_color", "#000000")):
+        value = str(raw.get(key) or default)
+        if not _COLOR.fullmatch(value):
+            raise OverlayError(f"{key} must look like #RRGGBB or #RRGGBBAA")
+        out[key] = value.upper()
+    for key, low, high, default in (("size", 8, 400, 60), ("stroke_width", 0, 20, 0)):
+        try:
+            out[key] = max(low, min(high, int(raw.get(key, default))))
+        except (TypeError, ValueError) as exc:
+            raise OverlayError(f"{key} must be a number") from exc
+    return out
+
+
+_FIELD = re.compile(r"\{(\w+)(?::0([1-9]))?\}")
+
+
+def fill_template(template: str, info: dict[str, Any]) -> str:
+    """``template`` with {title}, {show}, {season}, {episode} and {year} filled in;
+    ``{season:02}`` pads with zeros. Unknown or empty fields leave nothing."""
+
+    def sub(m: re.Match[str]) -> str:
+        if m.group(1) not in TEXT_FIELDS:
+            return m.group(0)
+        value = info.get(m.group(1))
+        if value is None or value == "":
+            return ""
+        if m.group(2) and isinstance(value, int):
+            return str(value).zfill(int(m.group(2)))
+        return str(value)
+
+    return _FIELD.sub(sub, template).strip()
 
 
 def _safe_rel(value: Any) -> str:
@@ -297,9 +381,15 @@ def describe_pack(config_dir: Path, pack: str | None) -> dict[str, Any] | None:
     for p in images:
         rel = str(p.parent.relative_to(root)).replace("\\", "/")
         folders[rel] = folders.get(rel, 0) + 1
+    fonts = sorted(
+        str(p.relative_to(root)).replace("\\", "/")
+        for p in root.rglob("*")
+        if p.suffix.lower() in FONT_SUFFIXES and p.is_file()
+    )
     return {
         "name": pack,
         "images": len(images),
+        "fonts": fonts,
         "top_files": sorted(str(p.relative_to(root)) for p in images if p.parent == root),
         "folders": dict(sorted(folders.items())),
     }
@@ -414,7 +504,11 @@ def _resolution_names(facts: dict[str, Any]) -> list[str]:
 
 
 def build_plan(
-    root: Path | None, level: str, layers: list[dict], facts: dict[str, Any] | None
+    root: Path | None,
+    level: str,
+    layers: list[dict],
+    facts: dict[str, Any] | None,
+    info: dict[str, Any] | None = None,
 ) -> RenderPlan:
     """The overlay files for one title at ``level`` (no I/O beyond directory listings)."""
     plan = RenderPlan(CANVAS[level])
@@ -430,6 +524,32 @@ def build_plan(
                 plan.layers.append(PlacedLayer(str(path), None))
             else:
                 plan.missing.append(layer["file"])
+            continue
+        if layer["type"] == "text":
+            text = fill_template(layer["template"], info or {})
+            if not text:
+                continue
+            font = ""
+            if layer.get("font"):
+                font_path = root / layer["font"]
+                if font_path.is_file():
+                    font = str(font_path)
+                else:
+                    plan.missing.append(layer["font"])
+            placement = {
+                k: layer[k]
+                for k in (
+                    "h_align",
+                    "v_align",
+                    "h_offset",
+                    "v_offset",
+                    "size",
+                    "color",
+                    "stroke_width",
+                    "stroke_color",
+                )
+            }
+            plan.layers.append(PlacedLayer(font, {**placement, "text": text}))
             continue
         folder = root / layer["folder"]
         if layer["type"] == "resolution":
@@ -479,6 +599,9 @@ def render_image(base: bytes | str, size: tuple[int, int], layers: list[tuple[st
     with src:
         canvas = ImageOps.fit(src.convert("RGB"), size, Image.Resampling.LANCZOS).convert("RGBA")
     for path, placement in layers:
+        if placement is not None and "text" in placement:
+            _draw_text(canvas, path, placement)
+            continue
         try:
             st = os.stat(path)
             stamp: tuple[int, int] | None = (st.st_size, st.st_mtime_ns)
@@ -503,6 +626,45 @@ def render_image(base: bytes | str, size: tuple[int, int], layers: list[tuple[st
     out = io.BytesIO()
     canvas.convert("RGB").save(out, "JPEG", quality=92, optimize=True)
     return out.getvalue()
+
+
+@lru_cache(maxsize=32)
+def _font(path: str, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    if path:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            pass  # a broken font file: fall back to the built-in one
+    return ImageFont.load_default(size)
+
+
+def _rgba(color: str) -> tuple[int, ...]:
+    value = color.lstrip("#")
+    return tuple(int(value[i : i + 2], 16) for i in range(0, len(value), 2))
+
+
+def _draw_text(canvas: Image.Image, font_path: str, p: dict[str, Any]) -> None:
+    """One line of text, shrunk until it fits between the side offsets."""
+    width = canvas.width - 2 * max(0, abs(int(p["h_offset"])))
+    size = int(p["size"])
+    stroke = int(p.get("stroke_width") or 0)
+    while True:
+        font = _font(font_path, size)
+        left, top, right, bottom = font.getbbox(p["text"], stroke_width=stroke)
+        if right - left <= width or size <= 8:
+            break
+        size = max(8, int(size * (width / max(1, right - left))) - 1)
+    layer = Image.new("RGBA", canvas.size)
+    x, y = _position(canvas.size, (right - left, bottom - top), p)
+    ImageDraw.Draw(layer).text(
+        (x - left, y - top),
+        p["text"],
+        font=font,
+        fill=_rgba(p["color"]),
+        stroke_width=stroke,
+        stroke_fill=_rgba(p.get("stroke_color") or "#000000"),
+    )
+    canvas.alpha_composite(layer)
 
 
 def render_to_file(

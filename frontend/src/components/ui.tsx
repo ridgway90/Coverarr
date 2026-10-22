@@ -145,7 +145,7 @@ export function Field({ label, hint, children }: { label: string; hint?: ReactNo
   );
 }
 
-const fieldBase =
+export const fieldBase =
   "h-10 rounded-md border border-line bg-bg px-3 text-sm text-text placeholder:text-muted/70 focus:border-accent focus:outline-none";
 export const inputClass = `${fieldBase} w-full`;
 export const selectClass = `${fieldBase} max-w-full`;
