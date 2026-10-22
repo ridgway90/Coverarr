@@ -334,6 +334,7 @@ interface SettingsData {
   trakt_client_id: string | null;
   trakt_client_secret: { has_value: boolean };
   mdblist_api_key: { has_value: boolean };
+  watch_region: string;
   poster_match_threshold: number;
   server_load: "gentle" | "normal" | "fast";
 }
@@ -367,6 +368,14 @@ function GeneralTab() {
       </Field>
       <Field label="MDBList API key" hint={data.mdblist_api_key.has_value ? "Saved. Enter a new key to replace it." : "For MDBList lists; get one at mdblist.com/preferences."}>
         <input className={inputClass} type="password" value={val("mdblist_api_key", "")} onChange={(e) => set("mdblist_api_key", e.target.value)} autoComplete="off" />
+      </Field>
+      <Field label="Streaming region" hint="The country whose streaming services count for streaming collections and logos, as a two-letter code (GB, US, DE…).">
+        <input
+          className={inputClass + " max-w-24 uppercase"}
+          maxLength={2}
+          value={val("watch_region", data.watch_region)}
+          onChange={(e) => set("watch_region", e.target.value.toUpperCase())}
+        />
       </Field>
       <Field
         label="Server load"

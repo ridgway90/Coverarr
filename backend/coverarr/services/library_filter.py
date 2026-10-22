@@ -1,9 +1,11 @@
 """Collections built from the library itself ("library_filter"), like Kometa's smart filters
 and its dynamic default collections: every title whose genre, year, decade, studio, network,
-resolution or content rating matches.
+resolution or content rating matches, or (from the details fetched from TMDb) where it
+streams, who directed or stars in it, its country, a show's status or its rating.
 
 A filter is a comma-separated list of conditions, all of which must hold:
-``genre=Comedy, decade=1990``, ``year=2000-2009``, ``year>=2015``, ``genre!=Horror``. Several
+``genre=Comedy, decade=1990``, ``year=2000-2009``, ``year>=2015``, ``genre!=Horror``,
+``streaming=Netflix``, ``imdb_rating>=8``. Several
 ``library_filter`` lists on one collection add up (any of them), as all its lists do.
 """
 
@@ -13,7 +15,32 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-FILTER_KEYS = ("genre", "year", "decade", "studio", "network", "resolution", "content_rating")
+FILTER_KEYS = (
+    "genre",
+    "year",
+    "decade",
+    "studio",
+    "network",
+    "resolution",
+    "content_rating",
+    "streaming",
+    "director",
+    "actor",
+    "country",
+    "status",
+    "tmdb_rating",
+    "imdb_rating",
+    "rt_rating",
+)
+NUMERIC_KEYS = ("year", "decade", "tmdb_rating", "imdb_rating", "rt_rating")
+# Filter key -> the list it's read from (in facts merged with details).
+LIST_KEYS = {
+    "genre": "genres",
+    "streaming": "streaming",
+    "director": "directors",
+    "actor": "cast",
+    "country": "countries",
+}
 _COND = re.compile(r"^\s*(\w+)\s*(!=|>=|<=|=)\s*(.+?)\s*$")
 
 
@@ -39,7 +66,7 @@ def parse_filter(text: str) -> list[Condition]:
         key, op, value = m.group(1).lower(), m.group(2), m.group(3)
         if key not in FILTER_KEYS:
             raise FilterError(f"Can't filter on {key!r}: use one of {', '.join(FILTER_KEYS)}")
-        if op in (">=", "<=") and key not in ("year", "decade"):
+        if op in (">=", "<=") and key not in NUMERIC_KEYS:
             raise FilterError(f"{key} can only be compared with = or !=")
         conditions.append(Condition(key, op, value))
     if not conditions:
@@ -57,25 +84,40 @@ def _values(key: str, year: int | None, facts: dict[str, Any]) -> list[str]:
         return [str(year)] if year else []
     if key == "decade":
         return [str(year // 10 * 10)] if year else []
-    if key == "genre":
-        return [str(g) for g in facts.get("genres") or []]
+    if key in LIST_KEYS:
+        return [str(g) for g in facts.get(LIST_KEYS[key]) or []]
     value = facts.get(key)
-    return [str(value)] if value else []
+    return [str(value)] if value not in (None, "") else []
+
+
+def _number(text: str) -> float | None:
+    try:
+        return float(text.strip().rstrip("%"))
+    except ValueError:
+        return None
 
 
 def _matches(cond: Condition, year: int | None, facts: dict[str, Any]) -> bool:
     have = _values(cond.key, year, facts)
-    if cond.key in ("year", "decade") and cond.op in (">=", "<=") or "-" in cond.value:
-        numbers = [int(v) for v in have if v.isdigit()]
+    numeric = cond.key in NUMERIC_KEYS and (cond.op in (">=", "<=") or "-" in cond.value.strip("-"))
+    if numeric:
+        numbers = [n for n in map(_number, have) if n is not None]
         if not numbers:
             return False
         n = numbers[0]
-        if "-" in cond.value and cond.op in ("=", "!="):
+        if cond.op in ("=", "!="):
             low, _, high = cond.value.partition("-")
-            inside = int(low) <= n <= int(high or low)
+            lo, hi = _number(low), _number(high or low)
+            inside = lo is not None and hi is not None and lo <= n <= hi
             return inside if cond.op == "=" else not inside
-        bound = int(cond.value)
+        bound = _number(cond.value)
+        if bound is None:
+            return False
         return n >= bound if cond.op == ">=" else n <= bound
+    if cond.key in NUMERIC_KEYS and cond.key not in ("year", "decade"):
+        wanted_n = _number(cond.value)
+        hit = wanted_n is not None and any(_number(v) == wanted_n for v in have)
+        return hit if cond.op == "=" else not hit
     wanted = cond.value.casefold()
     hit = any(v.casefold() == wanted for v in have)
     return hit if cond.op == "=" else not hit

@@ -65,3 +65,10 @@ Plex, Jellyfin and Emby, doing only the work that a change actually requires.
   default overlays (resolution, network, episode info), metadata files, asset folders,
   `tmdb_discover`, MDBList and AniList. Letterboxd's terms forbid scrapers and it has no
   public API, so its lists aren't supported.
+- [x] Details from TMDb (and MDBList): streaming services per region, ratings, show status,
+  people, countries; streaming / people / country collections and Kometa's matching defaults
+- [x] Streaming, ribbon, show status and audio codec badges; rating and runtime text
+- [x] Award collections and ribbons from Wikidata (Oscars, BAFTA, Golden Globes, Cannes,
+  Berlin, Venice, Emmys, Razzies)
+- [x] Seasonal collections (`schedule`, `delete_not_scheduled`, Kometa's `seasonal` default)
+- [x] Plex home-screen visibility (`visible_library`, `visible_home`, `visible_shared`)

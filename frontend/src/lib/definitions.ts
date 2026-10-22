@@ -20,7 +20,19 @@ export interface Definition {
   source: string;
   source_file: string | null;
   builders: Builder[];
-  options: { sync_mode?: "append" | "sync"; collection_order?: "release" | "alpha" | "custom"; sort_title?: string; summary?: string; label?: string[] | string; item_label?: string[] | string } & Record<
+  options: {
+    sync_mode?: "append" | "sync";
+    collection_order?: "release" | "alpha" | "custom";
+    sort_title?: string;
+    summary?: string;
+    label?: string[] | string;
+    item_label?: string[] | string;
+    schedule?: string;
+    delete_not_scheduled?: boolean;
+    visible_library?: boolean;
+    visible_home?: boolean;
+    visible_shared?: boolean;
+  } & Record<
     string,
     unknown
   >;
@@ -74,6 +86,20 @@ export const IMDB_CHARTS = [
   { value: "popular_shows", label: "Most popular shows", kinds: ["show"] as Kind[] },
 ];
 
+export const AWARDS = [
+  { value: "oscars_best_picture", label: "Oscar Best Picture", kinds: ["movie"] as Kind[] },
+  { value: "oscars", label: "Any Oscar", kinds: ["movie"] as Kind[] },
+  { value: "bafta_best_film", label: "BAFTA Best Film", kinds: ["movie"] as Kind[] },
+  { value: "bafta", label: "Any BAFTA", kinds: ["movie"] as Kind[] },
+  { value: "golden_globe_best_drama", label: "Golden Globe Best Drama", kinds: ["movie"] as Kind[] },
+  { value: "cannes_palme_dor", label: "Palme d'Or", kinds: ["movie"] as Kind[] },
+  { value: "berlinale_golden_bear", label: "Golden Bear", kinds: ["movie"] as Kind[] },
+  { value: "venice_golden_lion", label: "Golden Lion", kinds: ["movie"] as Kind[] },
+  { value: "razzie_worst_picture", label: "Razzie Worst Picture", kinds: ["movie"] as Kind[] },
+  { value: "emmys_best_drama", label: "Emmy Best Drama Series", kinds: ["show"] as Kind[] },
+  { value: "oscars_best_picture:nominated", label: "Oscar Best Picture nominees", kinds: ["movie"] as Kind[] },
+];
+
 export const SOURCE_TYPES: SourceType[] = [
   { type: "tmdb_list", label: "TMDb list", hint: "List id or URL", kinds: ["movie", "show"] },
   { type: "tmdb_collection", label: "TMDb collection", hint: "Collection id or URL", kinds: ["movie"] },
@@ -102,7 +128,9 @@ export const SOURCE_TYPES: SourceType[] = [
   { type: "anilist_trending", label: "AniList trending", hint: "How many titles", kinds: ["movie", "show"], chart: true },
   { type: "anilist_top_rated", label: "AniList top rated", hint: "How many titles", kinds: ["movie", "show"], chart: true },
   { type: "anilist_id", label: "AniList anime", hint: "AniList id", kinds: ["movie", "show"] },
-  { type: "library_filter", label: "From your library", hint: "genre=Comedy, decade=1990, studio=…", kinds: ["movie", "show"] },
+  { type: "library_filter", label: "From your library", hint: "genre=Comedy, decade=1990, streaming=Netflix, director=…, imdb_rating>=8", kinds: ["movie", "show"] },
+  { type: "tmdb_keyword", label: "TMDb keyword", hint: "e.g. christmas", kinds: ["movie", "show"] },
+  { type: "wikidata_award", label: "Award winners", hint: "Which award", kinds: ["movie", "show"], choices: AWARDS },
 ];
 
 export const SOURCE_BY_TYPE = new Map(SOURCE_TYPES.map((s) => [s.type, s]));
@@ -129,6 +157,8 @@ export function builderLink(b: Builder): { label: string; href?: string } {
   if (b.type === "tmdb_discover") return { label: `TMDb discover: ${decodeURIComponent(b.value).replace(/&/g, ", ")}` };
   if (b.type === "anilist_id") return { label: `AniList ${b.value}`, href: `https://anilist.co/anime/${b.value}` };
   if (b.type === "library_filter") return { label: `Library: ${b.value}` };
+  if (b.type === "tmdb_keyword") return { label: `TMDb keyword "${b.value}"` };
+  if (b.type === "wikidata_award") return { label: `${AWARDS.find((a) => a.value === b.value)?.label ?? b.value} (Wikidata)` };
   if (b.type === "trakt_list") return { label: `Trakt ${b.value.replace(/^https?:\/\/(www\.)?trakt\.tv\//, "")}`, href: b.value };
   return { label: `${b.type}: ${b.value}` };
 }

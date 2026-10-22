@@ -40,12 +40,15 @@ class StageContext(JobContext):
 async def run_safety_scan(ctx: JobContext) -> dict[str, Any]:
     from coverarr.services.changes import run_push_posters
     from coverarr.services.definitions import run_sync_definitions
+    from coverarr.services.details import run_fetch_details
     from coverarr.services.importer import run_import
     from coverarr.services.posters import run_poster_scan
 
     result: dict[str, Any] = {}
     await ctx.log("Weekly safety-net scan: import, sync collections, fingerprint, push differences")
-    result["import"] = await run_import(StageContext(ctx, 0.0, 0.5, {}))
+    result["import"] = await run_import(StageContext(ctx, 0.0, 0.45, {}))
+    # Streaming services, ratings and ribbons for collections and overlays.
+    result["details"] = await run_fetch_details(StageContext(ctx, 0.45, 0.5, {}))
     # The push at the end covers the collections' posters too.
     result["collections"] = await run_sync_definitions(
         StageContext(ctx, 0.5, 0.6, {"no_push": True})
@@ -133,7 +136,8 @@ class Scheduler:
                 queued.append("sync_definitions")
             await session.commit()
         for kind in queued:
-            params = {"config_dir": self.config_dir} if kind == "safety_scan" else {}
+            # The daily sync refreshes titles' details (streaming, ratings) first.
+            params = {"config_dir": self.config_dir} if kind == "safety_scan" else {"details": True}
             await self.runner.enqueue(kind, params)
         return queued
 

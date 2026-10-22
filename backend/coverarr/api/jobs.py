@@ -51,7 +51,7 @@ async def get_job(job_id: int, request: Request, session: AsyncSession = Depends
 
 
 class JobRequest(BaseModel):
-    kind: Literal["import", "poster_scan", "rematch"]
+    kind: Literal["import", "poster_scan", "rematch", "fetch_details"]
     server_ids: list[int] | None = None
 
 

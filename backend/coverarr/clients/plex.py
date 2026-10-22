@@ -21,7 +21,7 @@ from coverarr.clients.base import (
     ServerInfo,
     to_int,
 )
-from coverarr.services.mediainfo import normalize_resolution
+from coverarr.services.mediainfo import PLEX_AUDIO, normalize_resolution
 
 PLEX_TYPES: dict[str, int] = {"movie": 1, "show": 2, "season": 3, "episode": 4}
 PLEX_COLLECTION_SORT: dict[str, int] = {"release": 0, "alpha": 1, "custom": 2}
@@ -75,6 +75,8 @@ def _media_facts(
                     facts["hdr"] = True
         if meta.get("editionTitle"):
             facts["edition"] = meta["editionTitle"]
+        if audio := PLEX_AUDIO.get(str(media.get("audioCodec") or "").lower()):
+            facts["audio"] = audio
     elif kind == "show":
         network = meta.get("network") or meta.get("studio")
         if network:
@@ -593,6 +595,42 @@ class PlexClient(MediaServerClient):
     ) -> None:
         for member in member_ids:
             await self._request("DELETE", f"/library/collections/{collection_id}/items/{member}")
+
+    async def delete_collection(self, library_remote_id: str | None, collection_id: str) -> None:
+        await self._request("DELETE", f"/library/metadata/{collection_id}")
+
+    async def set_visibility(
+        self, library_remote_id: str | None, collection_id: str, visibility: dict[str, bool]
+    ) -> list[str]:
+        """Kometa's visible_library / visible_home / visible_shared: Plex's "Manage
+        Recommendations" for the collection's hub."""
+        if not library_remote_id:
+            return ["no library to set home screen visibility in"]
+        path = f"/hubs/sections/{library_remote_id}/manage"
+        params = {"metadataItemId": collection_id}
+        hubs = (await self._container(path, params=params)).get("Hub") or []
+        if not hubs:
+            await self._request("POST", path, params=params)
+            hubs = (await self._container(path, params=params)).get("Hub") or []
+        hub = hubs[0] if hubs else {}
+        if not hub.get("identifier"):
+            return ["Plex didn't make a hub for the collection"]
+        flags = {
+            "promotedToRecommended": "visible_library",
+            "promotedToOwnHome": "visible_home",
+            "promotedToSharedHome": "visible_shared",
+        }
+        # Plex takes all three at once; one not set in Coverarr keeps what Plex has.
+        params = {
+            flag: int(bool(visibility[key]))
+            if key in visibility
+            else int(str(hub.get(flag)).lower() in ("1", "true"))
+            for flag, key in flags.items()
+        }
+        current = {flag: int(str(hub.get(flag)).lower() in ("1", "true")) for flag in flags}
+        if params != current:
+            await self._request("PUT", f"{path}/{hub['identifier']}", params=params)
+        return []
 
     async def upload_poster(self, item_id: str, data: bytes, content_type: str) -> str | None:
         # Plex selects (and locks) an uploaded poster straight away.

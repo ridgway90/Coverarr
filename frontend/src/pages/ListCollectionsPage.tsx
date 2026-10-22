@@ -124,6 +124,8 @@ function DefinitionRow({
     d.options.sort_title && `sort title "${d.options.sort_title}"`,
     labelText(d.options.label) && `labels: ${labelText(d.options.label)}`,
     labelText(d.options.item_label) && `labels on its titles: ${labelText(d.options.item_label)}`,
+    d.options.schedule && `only ${scheduleText(d.options.schedule)}${d.options.delete_not_scheduled ? ", removed outside" : ""}`,
+    d.options.visible_home !== undefined && `home screen: ${d.options.visible_home ? "shown" : "hidden"}`,
   ].filter(Boolean);
 
   return (
@@ -262,6 +264,13 @@ function DefinitionForm({ definition, onClose }: { definition: Definition | null
   const [labels, setLabels] = useState(labelText(definition?.options.label));
   const [itemLabels, setItemLabels] = useState(labelText(definition?.options.item_label));
   const [enabled, setEnabled] = useState(definition?.enabled ?? true);
+  const [schedule, setSchedule] = useState(scheduleText(definition?.options.schedule));
+  const [deleteOutside, setDeleteOutside] = useState(definition?.options.delete_not_scheduled ?? true);
+  const [visibility, setVisibility] = useState<Record<Visibility, boolean | null>>({
+    visible_library: definition?.options.visible_library ?? null,
+    visible_home: definition?.options.visible_home ?? null,
+    visible_shared: definition?.options.visible_shared ?? null,
+  });
   const kind = libraries.find((l) => l.id === libraryId)?.kind ?? "movie";
   const types = SOURCE_TYPES.filter((s) => s.kinds.includes(kind));
   const hasChart = builders.some((b) => SOURCE_BY_TYPE.get(b.type)?.chart);
@@ -272,7 +281,17 @@ function DefinitionForm({ definition, onClose }: { definition: Definition | null
         name,
         library_id: libraryId === "" ? null : libraryId,
         builders: builders.filter((b) => String(b.value).trim()),
-        options: { sync_mode: mode, collection_order: order, sort_title: sortTitle, summary, label: labels, item_label: itemLabels },
+        options: {
+          sync_mode: mode,
+          collection_order: order,
+          sort_title: sortTitle,
+          summary,
+          label: labels,
+          item_label: itemLabels,
+          schedule: scheduleValue(schedule),
+          delete_not_scheduled: schedule.trim() ? deleteOutside : null,
+          ...visibility,
+        },
         enabled,
       };
       return definition ? api.put(`/api/definitions/${definition.id}`, body) : api.post("/api/definitions", body);
@@ -421,10 +440,62 @@ function DefinitionForm({ definition, onClose }: { definition: Definition | null
             <input className={inputClass} value={itemLabels} onChange={(e) => setItemLabels(e.target.value)} />
           </Field>
         </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Only between" hint="Month/day, e.g. 12/01-12/31 for December; it can wrap the new year (12/26-01/05). Outside it the collection isn't synced.">
+            <input className={inputClass} value={schedule} onChange={(e) => setSchedule(e.target.value)} placeholder="All year" />
+          </Field>
+          {schedule.trim() && (
+            <label className="flex items-start gap-2 pt-7 text-sm">
+              <input type="checkbox" className="mt-1" checked={deleteOutside} onChange={(e) => setDeleteOutside(e.target.checked)} />
+              <span>
+                Remove it from the servers outside these dates
+                <span className="block text-xs text-muted">It comes back, with its poster, when the dates come round.</span>
+              </span>
+            </label>
+          )}
+        </div>
+        <div>
+          <div className="mb-1 text-sm font-medium">Plex home screens</div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {VISIBILITY.map(([key, label]) => (
+              <label key={key} className="text-xs text-muted">
+                {label}
+                <select
+                  className={selectClass + " mt-1 w-full"}
+                  value={visibility[key] === null ? "" : visibility[key] ? "show" : "hide"}
+                  onChange={(e) => setVisibility({ ...visibility, [key]: e.target.value === "" ? null : e.target.value === "show" })}
+                >
+                  <option value="">Leave as it is</option>
+                  <option value="show">Show</option>
+                  <option value="hide">Hide</option>
+                </select>
+              </label>
+            ))}
+          </div>
+        </div>
         <ErrorNote error={save.error} />
       </div>
     </Modal>
   );
+}
+
+type Visibility = "visible_library" | "visible_home" | "visible_shared";
+const VISIBILITY: [Visibility, string][] = [
+  ["visible_library", "Library recommended"],
+  ["visible_home", "Your home"],
+  ["visible_shared", "Friends' home"],
+];
+
+/** "range(12/01-12/31)" -> "12/01-12/31" (several ranges stay as Kometa writes them). */
+function scheduleText(raw: string | undefined): string {
+  if (!raw) return "";
+  return raw.includes("|") ? raw : raw.replace(/^range\((.*)\)$/i, "$1");
+}
+
+function scheduleValue(text: string): string {
+  const t = text.trim();
+  if (!t || /range\(/i.test(t)) return t;
+  return `range(${t.replace(/\s+/g, "")})`;
 }
 
 function labelText(raw: string[] | string | undefined): string {

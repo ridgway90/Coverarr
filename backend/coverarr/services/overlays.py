@@ -36,7 +36,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from coverarr.services.mediainfo import edition_key, resolution_key
+from coverarr.services.mediainfo import audio_names, edition_key, resolution_key
 from coverarr.services.settings_store import get_setting, set_setting
 
 OVERLAYS_DIR = PurePosixPath("assets") / "overlays"
@@ -47,9 +47,32 @@ POSTER = (1000, 1500)
 LANDSCAPE = (1920, 1080)
 CANVAS = {"movie": POSTER, "show": POSTER, "season": POSTER, "episode": LANDSCAPE}
 LEVELS = {"movie": ["movie"], "show": ["show", "season", "episode"]}
-LAYER_TYPES = ("image", "resolution", "edition", "network", "text")
+LAYER_TYPES = (
+    "image",
+    "resolution",
+    "edition",
+    "network",
+    "text",
+    "streaming",
+    "ribbon",
+    "status",
+    "audio",
+)
+# Badge layers: an image from a folder, picked by the title's facts.
+BADGE_TYPES = ("resolution", "edition", "network", "streaming", "ribbon", "status", "audio")
 # What a text layer's template can show, e.g. "S{season:02}E{episode:02} {title}".
-TEXT_FIELDS = ("title", "show", "season", "episode", "year")
+# Text fields from the details fetched from TMDb / MDBList.
+DETAIL_FIELDS = (
+    "tmdb_rating",
+    "imdb_rating",
+    "rt_rating",
+    "rt_audience",
+    "metacritic",
+    "letterboxd_rating",
+    "runtime",
+    "status",
+)
+TEXT_FIELDS = ("title", "show", "season", "episode", "year", *DETAIL_FIELDS)
 FONT_SUFFIXES = (".ttf", ".otf")
 ALIGN_H = ("left", "center", "right")
 ALIGN_V = ("top", "center", "bottom")
@@ -109,6 +132,10 @@ class OverlaySetup:
             tuple(_resolution_names(f)),
             edition_key(f.get("edition")),
             f.get("network"),
+            tuple(f.get("streaming") or ()),
+            tuple(f.get("ribbons") or ()),
+            f.get("status"),
+            f.get("audio"),
         )
         plan = self._plans.get(key)
         if plan is None:
@@ -225,6 +252,13 @@ def clean_layers(layers: Any) -> list[dict]:
         if raw["type"] == "image":
             layer["file"] = _safe_rel(raw.get("file"))
         else:
+            if raw["type"] == "ribbon":
+                from coverarr.services.details import RIBBONS
+
+                wanted = raw.get("ribbons") or []
+                if not isinstance(wanted, list) or any(r not in RIBBONS for r in wanted):
+                    raise OverlayError(f"ribbons must be some of {', '.join(RIBBONS)}")
+                layer["ribbons"] = list(dict.fromkeys(wanted))
             if raw["type"] == "text":
                 layer.update(_clean_text(raw))
             else:
@@ -275,7 +309,12 @@ _FIELD = re.compile(r"\{(\w+)(?::0([1-9]))?\}")
 
 def fill_template(template: str, info: dict[str, Any]) -> str:
     """``template`` with {title}, {show}, {season}, {episode} and {year} filled in;
-    ``{season:02}`` pads with zeros. Unknown or empty fields leave nothing."""
+    ``{season:02}`` pads with zeros. Unknown or empty fields leave nothing. A line using a
+    rating, runtime or status the title doesn't have is left out altogether ("IMDb {imdb_rating}"
+    shouldn't show just "IMDb")."""
+    for m in _FIELD.finditer(template):
+        if m.group(1) in DETAIL_FIELDS and info.get(m.group(1)) in (None, ""):
+            return ""
 
     def sub(m: re.Match[str]) -> str:
         if m.group(1) not in TEXT_FIELDS:
@@ -503,6 +542,26 @@ def _resolution_names(facts: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(n for n in names if n))
 
 
+def badge_names(layer: dict, facts: dict[str, Any]) -> list[str]:
+    """Image names to look for in a badge layer's folder, best first."""
+    kind = layer["type"]
+    if kind == "resolution":
+        return _resolution_names(facts)
+    if kind == "edition":
+        key = edition_key(facts.get("edition"))
+        return [key] if key else []
+    if kind == "streaming":
+        return [str(s) for s in facts.get("streaming") or []]
+    if kind == "ribbon":
+        have = set(facts.get("ribbons") or [])
+        return [r for r in layer.get("ribbons") or [] if r in have]
+    if kind == "status":
+        return [facts["status"]] if facts.get("status") else []
+    if kind == "audio":
+        return audio_names(facts.get("audio"))
+    return [facts["network"]] if facts.get("network") else []
+
+
 def build_plan(
     root: Path | None,
     level: str,
@@ -552,18 +611,14 @@ def build_plan(
             plan.layers.append(PlacedLayer(font, {**placement, "text": text}))
             continue
         folder = root / layer["folder"]
-        if layer["type"] == "resolution":
-            names = _resolution_names(facts)
-        elif layer["type"] == "edition":
-            key = edition_key(facts.get("edition"))
-            names = [key] if key else []
-        else:
-            names = [facts["network"]] if facts.get("network") else []
+        names = badge_names(layer, facts)
         if not names:
             continue  # nothing to show for this title (e.g. no edition)
         path = _find(folder, names)
         if path is None:
-            plan.missing.append(f"{layer['folder']}/{names[0]}.png")
+            # A title on several streaming services shows the first one there's a logo for.
+            if layer["type"] != "streaming":
+                plan.missing.append(f"{layer['folder']}/{names[0]}.png")
             continue
         plan.layers.append(
             PlacedLayer(

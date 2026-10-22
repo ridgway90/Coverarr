@@ -61,6 +61,9 @@ export const JOB_LABELS: Record<string, string> = {
   tmdb_reset: "Reset posters from TMDb",
   arr_event: "Radarr/Sonarr update",
   safety_scan: "Weekly safety-net scan",
+  url_artwork: "Import images from YAML",
+  kometa_franchises: "Find franchises on TMDb",
+  fetch_details: "Fetch details from TMDb",
 };
 
 const FINISHED: Job["status"][] = ["succeeded", "failed", "cancelled"];

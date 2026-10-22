@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, Clock, DownloadCloud, Fingerprint, Loader2, ServerCog } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, DownloadCloud, Fingerprint, Info, Loader2, ServerCog } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button, Card, EmptyState, KIND_LABEL, PageHeader, ServerChip, Spinner, formatDate } from "../components/ui";
 import { api, type IssueType } from "../lib/api";
@@ -17,7 +17,7 @@ const ISSUE_LABELS: Record<IssueType, string> = {
 export function useStartJob() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (kind: "import" | "poster_scan" | "rematch") => api.post("/api/jobs", { kind }),
+    mutationFn: (kind: "import" | "poster_scan" | "rematch" | "fetch_details") => api.post("/api/jobs", { kind }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["dashboard"] }),
   });
 }
@@ -75,6 +75,14 @@ export default function DashboardPage() {
               title="Fingerprint posters that changed since the last scan"
             >
               Scan posters
+            </Button>
+            <Button
+              icon={<Info className="size-4" />}
+              loading={busy("fetch_details")}
+              onClick={() => start.mutate("fetch_details")}
+              title="Fetch streaming services, ratings, show status, people and ribbons from TMDb for titles that have none or week-old ones (the daily collection sync does this too)"
+            >
+              Fetch details
             </Button>
             <Button
               variant="primary"
