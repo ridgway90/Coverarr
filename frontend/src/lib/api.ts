@@ -238,6 +238,8 @@ export interface ChangesSummary {
   problems: number;
   backgrounds: number;
   background_uploads: number;
+  metadata: number;
+  metadata_uploads: number;
 }
 
 export interface Issue {

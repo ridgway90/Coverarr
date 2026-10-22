@@ -113,6 +113,9 @@ class Item:
     parent_index: int | None = None
     labels: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)  # Jellyfin/Emby tags set through the API
+    sort_title: str | None = None
+    summary: str | None = None
+    locked: list[str] = field(default_factory=list)
     art_seed: str | None = None
     art_version: int = 1
     overlay: bool = False
@@ -427,6 +430,8 @@ def plex_router(srv: FakeServer) -> APIRouter:
             out["art"] = f"/library/metadata/{item.id}/art/{1700000000 + item.bg_version}"
         if item.labels:
             out["Label"] = [{"tag": t} for t in item.labels]  # listings carry labels too
+        if item.sort_title:
+            out["titleSort"] = item.sort_title
         if item.year:
             out["year"] = item.year
         if item.kind in ("movie", "show"):
@@ -653,6 +658,16 @@ def plex_router(srv: FakeServer) -> APIRouter:
             target.labels = [t for t in target.labels if t not in gone]
             target.labels += [t for t in adds if t not in target.labels]
             return {}
+        if qp["id"] in srv.items:
+            item = srv.items[qp["id"]]
+            kinds = {"1": "movie", "2": "show"}
+            if kinds.get(qp.get("type", "")) != item.kind or item.library != lib:
+                raise HTTPException(400)
+            item.title = qp.get("title.value", item.title)
+            item.sort_title = qp.get("titleSort.value", item.sort_title)
+            item.summary = qp.get("summary.value", item.summary)
+            item.locked += [k.split(".")[0] for k in qp if k.endswith(".locked")]
+            return {}
         coll = srv.collections.get(qp["id"]) or _missing()
         if qp.get("type") != "18" or coll.library != lib:
             raise HTTPException(400)
@@ -753,11 +768,13 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
             "Id": item.id,
             "Name": item.title,
             "Type": JF_TYPE_OUT[item.kind],
-            "SortName": item.title.lower(),
+            "SortName": item.sort_title or item.title.lower(),
             "ImageTags": {"Primary": tag(item.art_version, item.id)},
         }
         if item.tags:
             out["Tags"] = list(item.tags)
+        if item.locked:
+            out["LockedFields"] = list(item.locked)
         if item.kind in ("movie", "show"):
             out["BackdropImageTags"] = [tag(f"bg{item.bg_version}", item.id)]
         if item.year:
@@ -904,7 +921,12 @@ def jellyfin_router(srv: FakeServer) -> APIRouter:
         if set(body.get("LockedFields") or []) - lockable:
             raise HTTPException(400, "LockedFields: not a MetadataField")
         if item_id in srv.items:
-            srv.items[item_id].tags = list(body.get("Tags") or [])
+            item = srv.items[item_id]
+            item.tags = list(body.get("Tags") or [])
+            item.title = body.get("Name") or item.title
+            item.sort_title = body.get("ForcedSortName") or item.sort_title
+            item.summary = body.get("Overview", item.summary)
+            item.locked = list(body.get("LockedFields") or [])
             return Response(status_code=204)
         coll = srv.collections.get(item_id) or _missing()
         coll.labels = list(body.get("Tags") or [])

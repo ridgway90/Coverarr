@@ -21,6 +21,7 @@ from coverarr.api import (
     jobs,
     kometa,
     library,
+    metadata,
     overlays,
     review,
     servers,
@@ -125,6 +126,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
     protected = [Depends(current_user)]
     for module in (
         backgrounds,
+        metadata,
         servers,
         settings,
         library,

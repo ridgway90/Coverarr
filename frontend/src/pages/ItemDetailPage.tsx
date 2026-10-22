@@ -5,6 +5,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import PrevNext from "../components/PrevNext";
 import PosterChooser from "../components/PosterChooser";
 import BackgroundChooser from "../components/BackgroundChooser";
+import MetadataEditor from "../components/MetadataEditor";
 import PendingPush from "../components/PendingPush";
 import { Button, Card, ErrorNote, PageHeader, Poster, PresenceChips, Spinner, cx } from "../components/ui";
 import { api, type ItemDetail } from "../lib/api";
@@ -164,6 +165,17 @@ export default function ItemDetailPage() {
           )}
         </div>
       </div>
+
+      {(item.kind === "movie" || item.kind === "show") && (
+        <Card className="mt-6 p-5">
+          <h2 className="mb-1 font-semibold">Details</h2>
+          <p className="mb-4 text-sm text-muted">
+            The title, sort title, summary and labels every server should show. They're locked on each server when pushed, so a
+            metadata refresh doesn't undo them.
+          </p>
+          <MetadataEditor itemId={item.id} />
+        </Card>
+      )}
 
       {(item.kind === "movie" || item.kind === "show") && (
         <Card className="mt-6 p-5">
