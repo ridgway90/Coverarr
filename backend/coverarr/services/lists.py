@@ -8,7 +8,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -17,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode
 
+import certifi
 import httpx
 
 from coverarr.clients.base import USER_AGENT
@@ -300,6 +303,12 @@ def sparql(query: str) -> dict[str, Any]:
     return data
 
 
+def _tls_context() -> ssl.SSLContext:
+    """The same CA bundle httpx uses (certifi, or SSL_CERT_FILE when set), not the
+    container's system store, so one up-to-date trust store covers every request."""
+    return ssl.create_default_context(cafile=os.environ.get("SSL_CERT_FILE") or certifi.where())
+
+
 def _sparql_fetch(query: str) -> dict[str, Any]:
     """Wikimedia's robot policy wants a User-Agent naming the project. It has also refused
     httpx's requests that urllib's identical ones got through, so this uses urllib."""
@@ -308,7 +317,7 @@ def _sparql_fetch(query: str) -> dict[str, Any]:
         url, headers={"User-Agent": WIKIDATA_AGENT, "Accept": "application/sparql-results+json"}
     )
     try:
-        with urllib.request.urlopen(request, timeout=60) as resp:
+        with urllib.request.urlopen(request, timeout=60, context=_tls_context()) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as exc:
         if exc.code == 429:
