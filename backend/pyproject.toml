@@ -10,6 +10,9 @@ dependencies = [
     "aiosqlite>=0.22",
     "alembic>=1.20",
     "httpx>=0.28",
+    # 2026.10.19 drops the compromised eMudhra/emSign intermediates (GHSA-6q48-6c7w-9gw2);
+    # httpx and the Wikidata queries both verify against this bundle.
+    "certifi>=2026.10.19",
     "pydantic>=2.14",
     "pydantic-settings>=2.16",
     "pillow>=13.0",
